@@ -214,22 +214,22 @@ void kmain(void) {
     serial_write("HYBRID: KERNEL_START\n");
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
-        hcf();
+        cpu_halt();
     }
     if (hhdm_request.response == NULL || memmap_request.response == NULL) {
         serial_write("HYBRID: FAIL_MEMORY_REQUESTS\n");
-        hcf();
+        cpu_halt();
     }
     if (!memory_init(memmap_request.response, hhdm_request.response->offset)) {
         serial_write("HYBRID: FAIL_MEMORY_INIT\n");
-        hcf();
+        cpu_halt();
     }
     serial_write("HYBRID: MEMORY_MAP_OK free_pages=");
     serial_write_hex64(memory_free_pages());
     serial_write("\n");
     if (!memory_self_test()) {
         serial_write("HYBRID: FAIL_MEMORY_SELFTEST\n");
-        hcf();
+        cpu_halt();
     }
     serial_write("HYBRID: MEMORY_SELFTEST_OK\n");
 
@@ -244,12 +244,12 @@ void kmain(void) {
 
     if (!interrupts_init()) {
         serial_write("HYBRID: FAIL_IDT_INIT\n");
-        hcf();
+        cpu_halt();
     }
     serial_write("HYBRID: IDT_OK\n");
     if (!interrupts_self_test()) {
         serial_write("HYBRID: FAIL_EXCEPTION_SELFTEST\n");
-        hcf();
+        cpu_halt();
     }
 
     interrupts_enable();
@@ -259,5 +259,5 @@ void kmain(void) {
     serial_write_hex64(interrupts_ticks());
     serial_write("\n");
     serial_write("HYBRID: BOOT_OK\n");
-    hcf();
+    cpu_halt();
 }
