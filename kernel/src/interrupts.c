@@ -105,7 +105,7 @@ void interrupts_wait_for_ticks(uint64_t target) {
      * If IRQ0 is not delivered, report CPU IF and legacy PIC state so CI
      * fails with actionable evidence instead of timing out silently.
      */
-    for (uint64_t spin = 0U; timer_tick_count < target && spin < UINT64_C(100000000); ++spin) {
+    for (uint64_t spin = 0U; timer_tick_count < target && spin < UINT64_C(1000000); ++spin) {
         __asm__ volatile ("pause");
     }
     if (timer_tick_count < target) {
