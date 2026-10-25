@@ -253,8 +253,14 @@ void kmain(void) {
     }
 
     interrupts_enable();
-    interrupts_wait_for_ticks(5U);
+    const bool timer_ok = interrupts_wait_for_ticks(5U);
     interrupts_disable();
+    if (!timer_ok || interrupts_ticks() < 5U) {
+        serial_write("HYBRID: FAIL_TIMER ticks=");
+        serial_write_hex64(interrupts_ticks());
+        serial_write("\n");
+        cpu_halt();
+    }
     serial_write("HYBRID: TIMER_OK ticks=");
     serial_write_hex64(interrupts_ticks());
     serial_write("\n");
