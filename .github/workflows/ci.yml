@@ -1,37 +1,31 @@
 name: HYBRID OS CI
-
 on:
   push:
     branches: [main, "feat/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   boot-smoke-test:
-    name: Build and boot in QEMU
+    name: Build and test Memory Core, IDT and PIT in QEMU
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@v5
-
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential binutils git curl xorriso qemu-system-x86
-
-      - name: Build ISO and verify boot
+      - name: Build ISO and run kernel regression tests
         run: make test
-
       - name: Upload kernel and ISO
         if: success()
         uses: actions/upload-artifact@v5
         with:
-          name: hybrid-os-bootstrap-v0.1.0
+          name: hybrid-os-v0.2.0
           path: |
             build/kernel.elf
             build/hybrid.iso
