@@ -1,36 +1,41 @@
 # Status implementacji i ograniczenia
 
-## Co sprawdzono
+## Status źródeł
 
-Na początku porządkowania repozytorium jego historia zawierała tylko początkowy README. Nie było tam źródeł kernela ani usług pozwalających potwierdzić implementację wszystkich opisanych funkcji.
+Gałąź rozwojowa `feat/bootstrap-v0.1.0` dodaje pierwszy szkielet wykonawczy:
+- kernel x86-64 w `kernel/src/main.c`;
+- konfigurację bootloadera oraz skrypt linkera;
+- pobieranie przypiętego Limine i przypiętego nagłówka protokołu;
+- budowanie obrazu ISO BIOS/UEFI;
+- test rozruchu QEMU przez diagnostykę COM1;
+- workflow GitHub Actions.
 
-## Co wnosi archiwum
+## Wynik weryfikacji prototypu
 
-- Spis założeń architektonicznych.
-- Zbiorcze specyfikacje wydań od v0.1.0 do v3.0.0.
-- Model bezpieczeństwa.
-- Strategię testowania i release process.
-- Kryteria akceptacji dla projektowanych etapów.
+**CI: PASS** dla commita `95c326407598b8f5c595d9e10235ba26ca65c3df`:
+- kompilacja kernela ELF64 zakończyła się powodzeniem;
+- pobrana paczka Limine przeszła kontrolę SHA-256;
+- obraz ISO BIOS/UEFI został utworzony;
+- QEMU zwrócił komunikaty `HYBRID: KERNEL_START`, `HYBRID: FRAMEBUFFER_OK` oraz `HYBRID: BOOT_OK`;
+- artefakt `hybrid-os-bootstrap-v0.1.0` został zachowany przez GitHub Actions.
 
-## Czego ten commit nie dowodzi
+Przebieg CI: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40225741501
 
-Nie dowodzi istnienia ani działania:
-- kernela x86-64, planisty, VMM i syscall ABI;
-- bootloadera, Secure Boot lub slotów A/B;
-- VFS, procesów Ring 3 i IPC;
-- Surface API, compositor ani działającego VirtIO-GPU;
-- kont, capabilities, sandboxa i Policy Engine;
-- Package Managera, SDK ani aktualizatora;
-- workflow CI, powtarzalnych buildów ani obrazu ISO.
+Ten wynik potwierdza minimalny rozruch w QEMU w kontrolowanym środowisku. **Nie** dowodzi jeszcze poprawnej pracy na fizycznych komputerach, stabilności sprzętowej ani bezpieczeństwa całego systemu.
 
-## Status domyślny
+## Co test boot oznacza
 
-Każda funkcja opisana bez kodu i wyników testów ma status **SPECIFIED / NOT VERIFIED**. Zmiana na IMPLEMENTED, TESTED lub RELEASED wymaga wskazania źródłowego kodu, polecenia budowania i wyników testów.
+Znacznik `HYBRID: BOOT_OK` oznacza, że QEMU przekazał sterowanie do funkcji startowej kernela i kernel wysłał komunikat przez COM1. Nie dowodzi obsługi fizycznego sprzętu, odporności na błędy, zabezpieczeń ani poprawności kolejnych warstw.
 
-## Następny krok praktyczny
+## Nadal niewdrożone
 
-1. Utworzyć rzeczywisty szkielet źródeł i zdefiniować kontrakt bootloadera.
-2. Przypiąć wersje kompilatora, linkera i zależności.
-3. Zbudować minimalny obraz x86-64 UEFI.
-4. Uruchomić go w QEMU i zachować log.
-5. Dodawać komponenty warstwami i aktualizować status na podstawie dowodów.
+- pełna obsługa wyjątków i IDT;
+- menedżer fizycznej i wirtualnej pamięci;
+- planista, procesy i syscall ABI;
+- IPC, VFS oraz trwałe systemy plików;
+- sterowniki wejścia, audio, sieci i grafiki poza prostym framebufferem;
+- aplikacje Ring 3, GUI i kompozytor;
+- konta, capabilities, sandbox i Policy Engine;
+- podpisywanie wydań, Secure Boot i bezpieczny aktualizator.
+
+Każda funkcja opisana bez kodu i wyników testów ma status **SPECIFIED / NOT VERIFIED**. Po każdym etapie należy aktualizować ten plik na podstawie konkretnego commita, kompilacji i testów.
