@@ -99,7 +99,7 @@ bool interrupts_self_test(void) {
 void interrupts_enable(void) { __asm__ volatile ("sti" : : : "memory"); }
 void interrupts_disable(void) { __asm__ volatile ("cli" : : : "memory"); }
 uint64_t interrupts_ticks(void) { return timer_tick_count; }
-void interrupts_wait_for_ticks(uint64_t target) {
+bool interrupts_wait_for_ticks(uint64_t target) {
     /*
      * Use a bounded diagnostic wait rather than an unbounded HLT loop.
      * If IRQ0 is not delivered, report CPU IF and legacy PIC state so CI
@@ -123,8 +123,10 @@ void interrupts_wait_for_ticks(uint64_t target) {
         serial_write_hex64(master_irr);
         serial_write(" pic_imr=");
         serial_write_hex64(master_imr);
-        serial_write("\\n");
+        serial_write("\n");
+        return false;
     }
+    return true;
 }
 void interrupt_dispatch(struct interrupt_frame *frame) {
     if (frame == NULL) {
