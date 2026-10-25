@@ -10,7 +10,18 @@ Gałąź rozwojowa `feat/bootstrap-v0.1.0` dodaje pierwszy szkielet wykonawczy:
 - test rozruchu QEMU przez diagnostykę COM1;
 - workflow GitHub Actions.
 
-**Status budowania i uruchomienia:** oczekuje na wynik CI. Dopóki workflow nie przejdzie, nie oznaczamy obrazu jako zweryfikowanego.
+## Wynik weryfikacji prototypu
+
+**CI: PASS** dla commita `95c326407598b8f5c595d9e10235ba26ca65c3df`:
+- kompilacja kernela ELF64 zakończyła się powodzeniem;
+- pobrana paczka Limine przeszła kontrolę SHA-256;
+- obraz ISO BIOS/UEFI został utworzony;
+- QEMU zwrócił komunikaty `HYBRID: KERNEL_START`, `HYBRID: FRAMEBUFFER_OK` oraz `HYBRID: BOOT_OK`;
+- artefakt `hybrid-os-bootstrap-v0.1.0` został zachowany przez GitHub Actions.
+
+Przebieg CI: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40225741501
+
+Ten wynik potwierdza minimalny rozruch w QEMU w kontrolowanym środowisku. **Nie** dowodzi jeszcze poprawnej pracy na fizycznych komputerach, stabilności sprzętowej ani bezpieczeństwa całego systemu.
 
 ## Co test boot oznacza
 
