@@ -20,6 +20,7 @@ extern void (*isr_stub_table[])(void);
 extern void isr_default_stub(void);
 static struct idt_gate idt[IDT_ENTRIES] __attribute__((aligned(16)));
 static volatile uint64_t timer_tick_count;
+static volatile bool timer_first_tick_reported;
 static volatile bool breakpoint_test_armed;
 static volatile bool breakpoint_test_passed;
 static inline void io_out8(uint16_t port, uint8_t value) {
@@ -80,7 +81,8 @@ bool interrupts_init(void) {
     struct idt_register loaded;
     __asm__ volatile ("sidt %0" : "=m"(loaded));
     if (loaded.base != idtr.base || loaded.limit != idtr.limit) return false;
-    timer_tick_count = 0U; breakpoint_test_armed = false; breakpoint_test_passed = false;
+    timer_tick_count = 0U; timer_first_tick_reported = false;
+    breakpoint_test_armed = false; breakpoint_test_passed = false;
     pic_remap_and_mask(); pit_init();
     return true;
 }
@@ -102,7 +104,13 @@ void interrupt_dispatch(struct interrupt_frame *frame) {
         for (;;) __asm__ volatile ("hlt");
     }
     if (frame->vector == TIMER_VECTOR) {
-        ++timer_tick_count; io_out8(0x20U, 0x20U); return;
+        ++timer_tick_count;
+        if (!timer_first_tick_reported) {
+            timer_first_tick_reported = true;
+            serial_write("HYBRID: IRQ0_FIRST\n");
+        }
+        io_out8(0x20U, 0x20U);
+        return;
     }
     if (frame->vector == 3U && breakpoint_test_armed) {
         breakpoint_test_armed = false; breakpoint_test_passed = true;
