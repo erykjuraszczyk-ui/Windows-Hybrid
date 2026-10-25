@@ -12,7 +12,7 @@ mkdir -p build
 log_file="build/qemu-serial.log"
 set +e
 timeout 12s qemu-system-x86_64 \
-  -machine q35 \
+  -machine pc \
   -m 512M \
   -cdrom build/hybrid.iso \
   -display none \
