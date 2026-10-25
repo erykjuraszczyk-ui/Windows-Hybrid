@@ -26,6 +26,11 @@ static volatile bool breakpoint_test_passed;
 static inline void io_out8(uint16_t port, uint8_t value) {
     __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port) : "memory");
 }
+static inline uint8_t io_in8(uint16_t port) {
+    uint8_t value;
+    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port) : "memory");
+    return value;
+}
 static inline void io_wait(void) {
     /* Legacy PIC/PIT devices may require an I/O-cycle delay between writes. */
     __asm__ volatile ("outb %%al, $0x80" : : "a"(0U) : "memory");
@@ -95,7 +100,31 @@ void interrupts_enable(void) { __asm__ volatile ("sti" : : : "memory"); }
 void interrupts_disable(void) { __asm__ volatile ("cli" : : : "memory"); }
 uint64_t interrupts_ticks(void) { return timer_tick_count; }
 void interrupts_wait_for_ticks(uint64_t target) {
-    while (timer_tick_count < target) __asm__ volatile ("hlt");
+    /*
+     * Use a bounded diagnostic wait rather than an unbounded HLT loop.
+     * If IRQ0 is not delivered, report CPU IF and legacy PIC state so CI
+     * fails with actionable evidence instead of timing out silently.
+     */
+    for (uint64_t spin = 0U; timer_tick_count < target && spin < UINT64_C(100000000); ++spin) {
+        __asm__ volatile ("pause");
+    }
+    if (timer_tick_count < target) {
+        uint64_t rflags;
+        __asm__ volatile ("pushfq; popq %0" : "=r"(rflags));
+        /* Select the PIC's IRR for diagnostic readback. */
+        io_out8(0x20U, 0x0AU);
+        const uint8_t master_irr = io_in8(0x20U);
+        const uint8_t master_imr = io_in8(0x21U);
+        serial_write("HYBRID: TIMER_DIAG ticks=");
+        serial_write_hex64(timer_tick_count);
+        serial_write(" rflags=");
+        serial_write_hex64(rflags);
+        serial_write(" pic_irr=");
+        serial_write_hex64(master_irr);
+        serial_write(" pic_imr=");
+        serial_write_hex64(master_imr);
+        serial_write("\\n");
+    }
 }
 void interrupt_dispatch(struct interrupt_frame *frame) {
     if (frame == NULL) {
