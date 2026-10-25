@@ -36,6 +36,7 @@ $(LIMINE_DIR)/limine: $(LIMINE_ARCHIVE)
 	rm -rf $(LIMINE_DIR)
 	mkdir -p $(BUILD_DIR)
 	tar --extract --gzip --file $< --directory $(BUILD_DIR)
+	$(MAKE) -C $(LIMINE_DIR) CC=gcc CFLAGS="-g -O2 -pipe"
 	test -x $@
 
 $(PROTOCOL_DIR)/.pinned:
