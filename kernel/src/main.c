@@ -2,6 +2,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <limine.h>
+#include "console.h"
+#include "interrupts.h"
+#include "memory.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t base_revision[] = LIMINE_BASE_REVISION(6);
@@ -9,6 +12,18 @@ static volatile uint64_t base_revision[] = LIMINE_BASE_REVISION(6);
 __attribute__((used, section(".limine_requests")))
 static volatile struct limine_framebuffer_request framebuffer_request = {
     .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_hhdm_request hhdm_request = {
+    .id = LIMINE_HHDM_REQUEST_ID,
+    .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_memmap_request memmap_request = {
+    .id = LIMINE_MEMMAP_REQUEST_ID,
     .revision = 0
 };
 
@@ -21,46 +36,6 @@ static volatile uint64_t requests_end[] = LIMINE_REQUESTS_END_MARKER;
 static inline void cpu_halt(void) {
     for (;;) {
         __asm__ volatile ("cli; hlt");
-    }
-}
-
-static inline void io_out8(uint16_t port, uint8_t value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline uint8_t io_in8(uint16_t port) {
-    uint8_t value;
-    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-static void serial_init(void) {
-    const uint16_t base = 0x3F8;
-    io_out8((uint16_t)(base + 1), 0x00);
-    io_out8((uint16_t)(base + 3), 0x80);
-    io_out8((uint16_t)(base + 0), 0x03);
-    io_out8((uint16_t)(base + 1), 0x00);
-    io_out8((uint16_t)(base + 3), 0x03);
-    io_out8((uint16_t)(base + 2), 0xC7);
-    io_out8((uint16_t)(base + 4), 0x0B);
-}
-
-static void serial_putc(char value) {
-    const uint16_t line_status = 0x3FD;
-    for (uint32_t spin = 0; spin < 1000000U; ++spin) {
-        if ((io_in8(line_status) & 0x20U) != 0U) {
-            io_out8(0x3F8, (uint8_t)value);
-            return;
-        }
-    }
-}
-
-static void serial_write(const char *text) {
-    while (*text != '\0') {
-        if (*text == '\n') {
-            serial_putc('\r');
-        }
-        serial_putc(*text++);
     }
 }
 
@@ -226,7 +201,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
               unit, icon_size - unit * 4U, white);
 
     draw_centered(fb, fb->height / 2U, "HYBRID OS", unit, white);
-    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.1.0", unit, cyan);
+    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.2.0", unit, cyan);
     draw_centered(fb, fb->height / 2U + unit * 22U, "BOOT OK", 2U, white);
     draw_centered(fb, fb->height - 24U, "X86-64 / UEFI", 1U, muted);
     rectangle(fb, 0U, 0U, fb->width, 4U, cyan);
@@ -234,14 +209,29 @@ static bool draw_splash(struct limine_framebuffer *fb) {
 }
 
 void kmain(void) {
-    serial_init();
-    serial_write("\nHYBRID OS v0.1.0\n");
+    console_init();
+    serial_write("\nHYBRID OS v0.2.0\n");
     serial_write("HYBRID: KERNEL_START\n");
-
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
-        cpu_halt();
+        hcf();
     }
+    if (hhdm_request.response == NULL || memmap_request.response == NULL) {
+        serial_write("HYBRID: FAIL_MEMORY_REQUESTS\n");
+        hcf();
+    }
+    if (!memory_init(memmap_request.response, hhdm_request.response->offset)) {
+        serial_write("HYBRID: FAIL_MEMORY_INIT\n");
+        hcf();
+    }
+    serial_write("HYBRID: MEMORY_MAP_OK free_pages=");
+    serial_write_hex64(memory_free_pages());
+    serial_write("\n");
+    if (!memory_self_test()) {
+        serial_write("HYBRID: FAIL_MEMORY_SELFTEST\n");
+        hcf();
+    }
+    serial_write("HYBRID: MEMORY_SELFTEST_OK\n");
 
     bool framebuffer_ready = false;
     if (framebuffer_request.response != NULL &&
@@ -249,13 +239,25 @@ void kmain(void) {
         framebuffer_ready = draw_splash(
             framebuffer_request.response->framebuffers[0]);
     }
+    if (framebuffer_ready) serial_write("HYBRID: FRAMEBUFFER_OK\n");
+    else serial_write("HYBRID: FRAMEBUFFER_UNAVAILABLE\n");
 
-    if (framebuffer_ready) {
-        serial_write("HYBRID: FRAMEBUFFER_OK\n");
-    } else {
-        serial_write("HYBRID: FRAMEBUFFER_UNAVAILABLE\n");
+    if (!interrupts_init()) {
+        serial_write("HYBRID: FAIL_IDT_INIT\n");
+        hcf();
+    }
+    serial_write("HYBRID: IDT_OK\n");
+    if (!interrupts_self_test()) {
+        serial_write("HYBRID: FAIL_EXCEPTION_SELFTEST\n");
+        hcf();
     }
 
+    interrupts_enable();
+    interrupts_wait_for_ticks(5U);
+    interrupts_disable();
+    serial_write("HYBRID: TIMER_OK ticks=");
+    serial_write_hex64(interrupts_ticks());
+    serial_write("\n");
     serial_write("HYBRID: BOOT_OK\n");
-    cpu_halt();
+    hcf();
 }
