@@ -23,7 +23,15 @@ static volatile uint64_t timer_tick_count;
 static volatile bool breakpoint_test_armed;
 static volatile bool breakpoint_test_passed;
 static inline void io_out8(uint16_t port, uint8_t value) {
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port) : "memory");
+}
+static inline void io_wait(void) {
+    /* Legacy PIC/PIT devices may require an I/O-cycle delay between writes. */
+    __asm__ volatile ("outb %%al, $0x80" : : "a"(0U) : "memory");
+}
+static void pic_write(uint16_t port, uint8_t value) {
+    io_out8(port, value);
+    io_wait();
 }
 static uint16_t current_code_selector(void) {
     uint16_t selector;
@@ -39,17 +47,21 @@ static void idt_set_gate(uint8_t vector, uintptr_t handler, uint16_t selector) {
     idt[vector].reserved = 0U;
 }
 static void pic_remap_and_mask(void) {
-    io_out8(0x20U, 0x11U); io_out8(0xA0U, 0x11U);
-    io_out8(0x21U, 0x20U); io_out8(0xA1U, 0x28U);
-    io_out8(0x21U, 0x04U); io_out8(0xA1U, 0x02U);
-    io_out8(0x21U, 0x01U); io_out8(0xA1U, 0x01U);
-    io_out8(0x21U, 0xFEU); io_out8(0xA1U, 0xFFU);
+    pic_write(0x20U, 0x11U); pic_write(0xA0U, 0x11U);
+    pic_write(0x21U, 0x20U); pic_write(0xA1U, 0x28U);
+    pic_write(0x21U, 0x04U); pic_write(0xA1U, 0x02U);
+    pic_write(0x21U, 0x01U); pic_write(0xA1U, 0x01U);
+    /* Unmask only master IRQ0; keep every other legacy IRQ masked. */
+    pic_write(0x21U, 0xFEU); pic_write(0xA1U, 0xFFU);
 }
 static void pit_init(void) {
     const uint16_t divisor = (uint16_t)(PIT_INPUT_HZ / PIT_FREQUENCY);
     io_out8(0x43U, 0x36U);
+    io_wait();
     io_out8(0x40U, (uint8_t)(divisor & 0xFFU));
+    io_wait();
     io_out8(0x40U, (uint8_t)((divisor >> 8U) & 0xFFU));
+    io_wait();
 }
 bool interrupts_init(void) {
     __asm__ volatile ("cli");
