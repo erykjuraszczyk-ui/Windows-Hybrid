@@ -1,36 +1,30 @@
 # Status implementacji i ograniczenia
 
-## Co sprawdzono
+## Status źródeł
 
-Na początku porządkowania repozytorium jego historia zawierała tylko początkowy README. Nie było tam źródeł kernela ani usług pozwalających potwierdzić implementację wszystkich opisanych funkcji.
+Gałąź rozwojowa `feat/bootstrap-v0.1.0` dodaje pierwszy szkielet wykonawczy:
+- kernel x86-64 w `kernel/src/main.c`;
+- konfigurację bootloadera oraz skrypt linkera;
+- pobieranie przypiętego Limine i przypiętego nagłówka protokołu;
+- budowanie obrazu ISO BIOS/UEFI;
+- test rozruchu QEMU przez diagnostykę COM1;
+- workflow GitHub Actions.
 
-## Co wnosi archiwum
+**Status budowania i uruchomienia:** oczekuje na wynik CI. Dopóki workflow nie przejdzie, nie oznaczamy obrazu jako zweryfikowanego.
 
-- Spis założeń architektonicznych.
-- Zbiorcze specyfikacje wydań od v0.1.0 do v3.0.0.
-- Model bezpieczeństwa.
-- Strategię testowania i release process.
-- Kryteria akceptacji dla projektowanych etapów.
+## Co test boot oznacza
 
-## Czego ten commit nie dowodzi
+Znacznik `HYBRID: BOOT_OK` oznacza, że QEMU przekazał sterowanie do funkcji startowej kernela i kernel wysłał komunikat przez COM1. Nie dowodzi obsługi fizycznego sprzętu, odporności na błędy, zabezpieczeń ani poprawności kolejnych warstw.
 
-Nie dowodzi istnienia ani działania:
-- kernela x86-64, planisty, VMM i syscall ABI;
-- bootloadera, Secure Boot lub slotów A/B;
-- VFS, procesów Ring 3 i IPC;
-- Surface API, compositor ani działającego VirtIO-GPU;
-- kont, capabilities, sandboxa i Policy Engine;
-- Package Managera, SDK ani aktualizatora;
-- workflow CI, powtarzalnych buildów ani obrazu ISO.
+## Nadal niewdrożone
 
-## Status domyślny
+- pełna obsługa wyjątków i IDT;
+- menedżer fizycznej i wirtualnej pamięci;
+- planista, procesy i syscall ABI;
+- IPC, VFS oraz trwałe systemy plików;
+- sterowniki wejścia, audio, sieci i grafiki poza prostym framebufferem;
+- aplikacje Ring 3, GUI i kompozytor;
+- konta, capabilities, sandbox i Policy Engine;
+- podpisywanie wydań, Secure Boot i bezpieczny aktualizator.
 
-Każda funkcja opisana bez kodu i wyników testów ma status **SPECIFIED / NOT VERIFIED**. Zmiana na IMPLEMENTED, TESTED lub RELEASED wymaga wskazania źródłowego kodu, polecenia budowania i wyników testów.
-
-## Następny krok praktyczny
-
-1. Utworzyć rzeczywisty szkielet źródeł i zdefiniować kontrakt bootloadera.
-2. Przypiąć wersje kompilatora, linkera i zależności.
-3. Zbudować minimalny obraz x86-64 UEFI.
-4. Uruchomić go w QEMU i zachować log.
-5. Dodawać komponenty warstwami i aktualizować status na podstawie dowodów.
+Każda funkcja opisana bez kodu i wyników testów ma status **SPECIFIED / NOT VERIFIED**. Po każdym etapie należy aktualizować ten plik na podstawie konkretnego commita, kompilacji i testów.

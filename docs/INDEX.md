@@ -2,6 +2,7 @@
 
 ## Dokumenty główne
 
+- [BOOTSTRAP v0.1.0](BOOTSTRAP_v0.1.0.md) — budowanie kernela, ISO i test rozruchu QEMU.
 - [ROADMAP.md](ROADMAP.md) — historia wersji i zależności pomiędzy etapami.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — warstwy systemu i granice odpowiedzialności.
 - [SECURITY_MODEL.md](SECURITY_MODEL.md) — capabilities, sandbox, tożsamość, polityki i rozruch.

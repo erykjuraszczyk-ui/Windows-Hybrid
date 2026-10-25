@@ -1,37 +1,43 @@
 # Windows-Hybrid — HYBRID OS
 
-**Projekt:** HYBRID OS, hybrydowy system operacyjny dla architektury x86-64.
+**Projekt:** natywny, hybrydowy system operacyjny x86-64.  
+**Aktualny etap:** bootstrap v0.1.0 — pierwszy kernel i powtarzalny test rozruchu.
 
-To repozytorium archiwizuje specyfikacje, architekturę, plany implementacji, kryteria akceptacji i proces wydawania systemu — od wczesnego v0.1.0 do v3.0.0.
+## Status — czytaj przed użyciem
 
-## Ważny status projektu
+Repozytorium zawiera dokumentację architektury oraz kod minimalnego prototypu kernela w gałęzi rozwojowej. **Nie jest to jeszcze kompletny system operacyjny ani zamiennik Windows/Linux.** Harmonogram procesów, pamięć wirtualna, VFS, procesy Ring 3, sterowniki urządzeń i pulpit pozostają osobnymi etapami.
 
-Dokumentacja opisuje projektowane funkcje. **Nie potwierdza**, że wszystkie komponenty zostały zaimplementowane, zbudowane lub przetestowane. Przed oznaczeniem jakiejkolwiek funkcji jako gotowej wymagane są kod źródłowy, kompilacja i odpowiednie testy.
+Rozruch można uznać za zweryfikowany dopiero po udanym buildzie i teście QEMU w CI. Samo istnienie źródeł nie jest dowodem działania.
 
-Przed rozpoczęciem tego porządkowania repozytorium zawierało jedynie początkowy README. Ten etap dodaje przede wszystkim dokumentację projektową, a nie kompletny kernel ani gotowy obraz systemu.
+## Pierwszy prototyp
 
-## Dokumentacja
+- kernel x86-64 w C17 z rozszerzeniami kompilatora wymaganymi dla kodu niskopoziomowego;
+- protokół startowy Limine z przypiętym commitem nagłówka i sprawdzanym SHA-256 paczki bootloadera;
+- ekran startowy przez framebuffer oraz komunikaty diagnostyczne COM1;
+- obraz ISO przygotowywany dla rozruchu BIOS/UEFI;
+- test rozruchu QEMU w GitHub Actions.
+
+Szczegółowa instrukcja: [docs/BOOTSTRAP_v0.1.0.md](docs/BOOTSTRAP_v0.1.0.md).
+
+## Dokumentacja projektu
 
 - [Indeks dokumentów](docs/INDEX.md)
 - [Mapa drogowa v0.1.0–v3.0.0](docs/ROADMAP.md)
-- [Archiitektura](docs/ARCHITECTURE.md)
+- [Architektura](docs/ARCHITECTURE.md)
 - [Model bezpieczeństwa](docs/SECURITY_MODEL.md)
 - [Testowanie i kryteria akceptacji](docs/TESTING.md)
 - [Proces kompilacji i wydań](docs/RELEASE_PROCESS.md)
 - [Status implementacji](docs/IMPLEMENTATION_STATUS.md)
-- [Zbiorcze specyfikacje wszystkich etapów](docs/versions/HYBRID_OS_v0.1.0-v3.0.0.md)
+- [Zbiorcze specyfikacje v0.1.0–v3.0.0](docs/versions/HYBRID_OS_v0.1.0-v3.0.0.md)
 
-## Główne założenia
+## Planowane warstwy
 
-- Architektura x86-64 i rozruch UEFI.
-- Kernel i podstawowe usługi w C17, z Assembly tam, gdzie wymaga tego architektura.
-- Aplikacje w Ring 3 z wersjonowanym ABI oraz IPC.
-- Surface API, okna, współdzielone bufory i wymienne backendy wyświetlania.
-- VirtIO-GPU 2D jako opcjonalny backend, jeżeli przejdzie testy.
-- Capabilities, sandboxing, tożsamości, polityki dostępu i audyt.
-- CI, powtarzalne buildy, podpisane wydania i kontrolowane aktualizacje.
-- Zweryfikowany łańcuch rozruchowy jako cel dla v3.0.0.
+1. Rozruch i kontrakt bootloader–kernel.
+2. Obsługa wyjątków, diagnostyka oraz zarządzanie pamięcią.
+3. Przerwania, zegar i planista.
+4. Syscall ABI, procesy i IPC.
+5. VFS i podstawowe usługi.
+6. Grafika, powierzchnie, kompozytor i wejście.
+7. Tożsamości, capabilities, sandbox i aktualizacje.
 
-## Zasada projektu
-
-Każda funkcja musi mieć udokumentowany kontrakt, obsługę błędów, testy i status. Nie traktujemy opisu, przykładowego kodu ani planowanego pliku jako dowodu implementacji.
+Każdy etap musi dostarczyć kod, polecenia budowania, testy i jawny status. Nie oznaczamy niewdrożonych funkcji jako gotowych.
