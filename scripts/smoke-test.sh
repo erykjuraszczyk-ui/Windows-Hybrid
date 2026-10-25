@@ -13,6 +13,7 @@ log_file="build/qemu-serial.log"
 set +e
 timeout 12s qemu-system-x86_64 \
   -machine q35 \
+  -cpu qemu64,-apic \
   -m 512M \
   -cdrom build/hybrid.iso \
   -display none \
