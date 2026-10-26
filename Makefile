@@ -57,9 +57,9 @@ $(BUILD_DIR)/memory.o: kernel/src/memory.c kernel/src/memory.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Ikernel/src -I$(PROTOCOL_DIR)/include -c $< -o $@
 
-$(BUILD_DIR)/scheduler.o: kernel/src/scheduler.c kernel/src/scheduler.h
+$(BUILD_DIR)/scheduler.o: kernel/src/scheduler.c kernel/src/scheduler.h kernel/src/memory.h
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -Ikernel/src -c $< -o $@
+	$(CC) $(CFLAGS) -Ikernel/src -I$(PROTOCOL_DIR)/include -c $< -o $@
 
 $(BUILD_DIR)/interrupts.o: kernel/src/interrupts.c kernel/src/interrupts.h kernel/src/console.h kernel/src/scheduler.h
 	@mkdir -p $(BUILD_DIR)
