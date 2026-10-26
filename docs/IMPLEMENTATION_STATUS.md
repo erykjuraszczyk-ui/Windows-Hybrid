@@ -5,22 +5,32 @@
 - v0.1.0: minimalny kernel i QEMU boot smoke test.
 - v0.2.0: Memory Core, IDT, test int3 i PIT w skonfigurowanym QEMU.
 - v0.3.0: kooperatywny round-robin Scheduler Core.
-- v0.4.0: ograniczony preemptive context-switch test w QEMU; log potwierdza `PREEMPTIVE_SELFTEST_OK` i `BOOT_OK`.
+- v0.4.0: ograniczony preemptive context-switch test w QEMU; `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`.
 
 ## HYBRID OS v0.5.0 — Task Lifecycle, TSS/IST
 
-**Status: oczekuje na wynik CI.**
+**CI PASS w skonfigurowanym QEMU.**
 
-Implementacja na gałęzi `feat/hybrid-os-v0.5.0-task-lifecycle-tss-ist` dodaje:
-- własną GDT z kodem/danymi Ring 0 oraz deskryptorem TSS;
-- TSS.RSP0 i pięć stron stosów: jeden stos RSP0 plus cztery IST;
-- IST1 dla #DF, IST2 dla #GP, IST3 dla #PF i IST4 dla NMI;
-- sprawdzenie selektora TR, GDT i przypisań IST w załadowanej IDT;
-- API `scheduler_task_create` i `scheduler_task_reap`;
-- stany EXITED/FAILED i ochronę przed zwolnieniem stosu aktywnego zadania;
-- monotoniczne identyfikatory, czyszczenie slotu po reaping i możliwość ponownego użycia slotu;
-- skończone zadania testowe, które kończą się naturalnie, po czym ich stosy są zwalniane;
-- markery CI `TSS_OK`, `IST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` i `BOOT_OK`.
+Potwierdzający przebieg:
+https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40307342604
+
+Końcowe markery:
+- `HYBRID: TSS_OK`
+- `HYBRID: IDT_OK`
+- `HYBRID: IST_OK`
+- `HYBRID: EXCEPTION_SELFTEST_OK`
+- `HYBRID: TIMER_OK ticks=0x0000000000000005`
+- `HYBRID: SCHEDULER_SELFTEST_OK dispatches=0x000000000000000B`
+- `HYBRID: TASK_LIFECYCLE_SELFTEST_OK`
+- `HYBRID: PREEMPTIVE_SELFTEST_OK switches=0x0000000000000001 task_a=0x000000000000C350 task_b=0x000000000000C350`
+- `HYBRID: BOOT_OK`
+
+Implementacja:
+- własna GDT z selektorami Ring 0 oraz deskryptorem TSS 64-bit;
+- TSS.RSP0 i cztery dedykowane stosy IST (każdy w osobnej stronie Memory Core);
+- IST1 dla #DF, IST2 dla #GP, IST3 dla #PF, IST4 dla NMI; samotest potwierdza deskryptor TR i przypisania w IDT;
+- `scheduler_task_create` i `scheduler_task_reap`, monotoniczne identyfikatory zadań, stany EXITED/FAILED, możliwość ponownego użycia zwolnionego slotu;
+- test dwóch skończonych zadań potwierdza 50 000 iteracji dla każdego z nich, przełączenie kontekstu i odzyskanie stron stosów.
 
 Weryfikacja IST obejmuje konfigurację GDT/TSS/IDT oraz kontrolę indeksów IST. Nie wykonuje jeszcze wymuszonego double fault/page fault jako testu fault-injection.
 
@@ -29,6 +39,5 @@ Weryfikacja IST obejmuje konfigurację GDT/TSS/IDT oraz kontrolę indeksów IST.
 - Jednordzeniowy kernel, zadania Ring 0. TSS/IST nie jest izolacją bezpieczeństwa procesów.
 - Brak Ring 3, syscall ABI, SMP, FPU/SSE/AVX context-save/restore, blokowania/wybudzania i ogólnego systemu synchronizacji.
 - Wyniki QEMU potwierdzają wyłącznie testowaną konfigurację emulatora, nie fizyczny sprzęt.
-- Wydanie v0.5.0 nie może być oznaczone CI PASS przed zaliczeniem aktualnego przebiegu QEMU.
 
 Funkcje poza zakresem zaliczonych testów pozostają SPECIFIED / NOT VERIFIED.
