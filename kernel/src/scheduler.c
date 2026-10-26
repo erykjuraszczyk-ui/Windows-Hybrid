@@ -14,6 +14,9 @@ typedef struct {
     void * volatile saved_frame;
     uint64_t stack_physical;
     scheduler_wait_queue_t *waiting_on;
+    uint64_t wait_deadline;
+    bool has_deadline;
+    scheduler_wait_result_t wait_result;
 } scheduler_task_t;
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
@@ -39,6 +42,7 @@ static void * volatile bootstrap_frame;
 static volatile uint32_t current_task_index;
 static volatile uint64_t preemptive_ticks, preemptive_switches;
 static volatile uint64_t preemptive_tick_limit;
+static volatile uint64_t timer_expiration_count;
 static volatile uint64_t test_counter_a, test_counter_b;
 #define SCHEDULER_TASK_TEST_ITERATIONS UINT64_C(50000)
 
@@ -117,6 +121,9 @@ void scheduler_init(void) {
         task_table[i].saved_frame = NULL;
         task_table[i].stack_physical = 0U;
         task_table[i].waiting_on = NULL;
+        task_table[i].wait_deadline = 0U;
+        task_table[i].has_deadline = false;
+        task_table[i].wait_result = SCHEDULER_WAIT_NONE;
     }
     scheduler_cursor = 0U;
     if (!scheduler_ever_initialized) {
@@ -133,6 +140,7 @@ void scheduler_init(void) {
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
     preemptive_tick_limit = SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    timer_expiration_count = 0U;
     test_counter_a = 0U;
     test_counter_b = 0U;
 }
@@ -158,6 +166,9 @@ bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task
     task->saved_frame = NULL;
     task->stack_physical = 0U;
     task->waiting_on = NULL;
+    task->wait_deadline = 0U;
+    task->has_deadline = false;
+    task->wait_result = SCHEDULER_WAIT_NONE;
     *task_id = task->id;
     scheduler_irq_restore(flags);
     return true;
@@ -258,6 +269,9 @@ bool scheduler_task_create(scheduler_task_entry_fn entry, scheduler_task_id_t *t
     task->saved_frame = frame;
     task->stack_physical = physical;
     task->waiting_on = NULL;
+    task->wait_deadline = 0U;
+    task->has_deadline = false;
+    task->wait_result = SCHEDULER_WAIT_NONE;
     *task_id = task->id;
     scheduler_irq_restore(flags);
     return true;
@@ -271,7 +285,8 @@ bool scheduler_task_reap(scheduler_task_id_t task_id) {
     if (index == SCHEDULER_NO_TASK || preemptive_active ||
         current_task_index == index || task_table[index].waiting_on != NULL ||
         (task_table[index].state != SCHEDULER_TASK_EXITED &&
-         task_table[index].state != SCHEDULER_TASK_FAILED)) {
+         task_table[index].state != SCHEDULER_TASK_FAILED &&
+         task_table[index].state != SCHEDULER_TASK_CANCELLED)) {
         scheduler_irq_restore(flags);
         return false;
     }
@@ -288,6 +303,9 @@ bool scheduler_task_reap(scheduler_task_id_t task_id) {
     task_table[index].saved_frame = NULL;
     task_table[index].stack_physical = 0U;
     task_table[index].waiting_on = NULL;
+    task_table[index].wait_deadline = 0U;
+    task_table[index].has_deadline = false;
+    task_table[index].wait_result = SCHEDULER_WAIT_NONE;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -301,6 +319,8 @@ bool scheduler_task_block(scheduler_task_id_t task_id) {
         return false;
     }
     task_table[index].state = SCHEDULER_TASK_BLOCKED;
+    task_table[index].has_deadline = false;
+    task_table[index].wait_result = SCHEDULER_WAITING;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -315,8 +335,44 @@ bool scheduler_task_wake(scheduler_task_id_t task_id) {
         return false;
     }
     task_table[index].state = SCHEDULER_TASK_READY;
+    task_table[index].has_deadline = false;
+    task_table[index].wait_result = SCHEDULER_WAIT_SIGNALED;
     scheduler_irq_restore(flags);
     return true;
+}
+
+static void scheduler_remove_waiter_locked(uint32_t index) {
+    if (index >= SCHEDULER_MAX_TASKS) return;
+    scheduler_task_t *task = &task_table[index];
+    if (task->waiting_on != NULL) {
+        task->waiting_on->waiters &= ~(UINT32_C(1) << index);
+        task->waiting_on = NULL;
+    }
+}
+
+static bool scheduler_deadline_reached(uint64_t now, uint64_t deadline) {
+    return (int64_t)(now - deadline) >= 0;
+}
+
+static bool scheduler_has_blocked_tasks(void) {
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i)
+        if (task_table[i].state == SCHEDULER_TASK_BLOCKED) return true;
+    return false;
+}
+
+static void scheduler_process_timeouts(uint64_t now) {
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
+        scheduler_task_t *task = &task_table[i];
+        if (task->state != SCHEDULER_TASK_BLOCKED || !task->has_deadline ||
+            !scheduler_deadline_reached(now, task->wait_deadline)) continue;
+        scheduler_remove_waiter_locked(i);
+        task->has_deadline = false;
+        task->wait_deadline = 0U;
+        task->wait_result = (task->wait_result == SCHEDULER_WAIT_SLEEPING)
+            ? SCHEDULER_WAIT_SLEEP_COMPLETE : SCHEDULER_WAIT_TIMED_OUT;
+        task->state = SCHEDULER_TASK_READY;
+        ++timer_expiration_count;
+    }
 }
 
 void scheduler_wait_queue_init(scheduler_wait_queue_t *queue) {
@@ -335,6 +391,9 @@ static bool wait_queue_wake_one_locked(scheduler_wait_queue_t *queue) {
         if (task_table[i].waiting_on == queue &&
             task_table[i].state == SCHEDULER_TASK_BLOCKED) {
             task_table[i].waiting_on = NULL;
+            task_table[i].has_deadline = false;
+            task_table[i].wait_deadline = 0U;
+            task_table[i].wait_result = SCHEDULER_WAIT_SIGNALED;
             task_table[i].state = SCHEDULER_TASK_READY;
             return true;
         }
@@ -342,8 +401,11 @@ static bool wait_queue_wake_one_locked(scheduler_wait_queue_t *queue) {
     return false;
 }
 
-bool scheduler_wait_queue_wait(scheduler_wait_queue_t *queue) {
-    if (queue == NULL) return false;
+static bool scheduler_wait_queue_wait_internal(scheduler_wait_queue_t *queue,
+                                                uint64_t timeout_ticks,
+                                                bool timed) {
+    if (queue == NULL || (timed && (timeout_ticks == 0U || timeout_ticks > (uint64_t)INT64_MAX)))
+        return false;
     const uint64_t flags = scheduler_irq_save_disable();
     const uint32_t index = current_task_index;
     if (!preemptive_active || index >= SCHEDULER_MAX_TASKS ||
@@ -352,15 +414,72 @@ bool scheduler_wait_queue_wait(scheduler_wait_queue_t *queue) {
         scheduler_irq_restore(flags);
         return false;
     }
+    scheduler_task_t *task = &task_table[index];
+    task->wait_result = SCHEDULER_WAITING;
+    task->has_deadline = timed;
+    task->wait_deadline = timed ? interrupts_ticks() + timeout_ticks : 0U;
     queue->waiters |= UINT32_C(1) << index;
-    task_table[index].waiting_on = queue;
-    task_table[index].state = SCHEDULER_TASK_BLOCKED;
+    task->waiting_on = queue;
+    task->state = SCHEDULER_TASK_BLOCKED;
     scheduler_irq_restore(flags);
     while (task_table[index].state == SCHEDULER_TASK_BLOCKED)
         __asm__ volatile ("sti; hlt; cli" : : : "memory");
     scheduler_irq_restore(flags);
-    return task_table[index].state == SCHEDULER_TASK_RUNNING;
+    return task_table[index].state == SCHEDULER_TASK_RUNNING &&
+           task_table[index].wait_result == SCHEDULER_WAIT_SIGNALED;
 }
+
+bool scheduler_wait_queue_wait(scheduler_wait_queue_t *queue) {
+    return scheduler_wait_queue_wait_internal(queue, 0U, false);
+}
+
+bool scheduler_wait_queue_wait_timeout(scheduler_wait_queue_t *queue, uint64_t timeout_ticks) {
+    return scheduler_wait_queue_wait_internal(queue, timeout_ticks, true);
+}
+
+bool scheduler_sleep_ticks(uint64_t ticks) {
+    if (ticks == 0U) return true;
+    if (ticks > (uint64_t)INT64_MAX) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = current_task_index;
+    if (!preemptive_active || index >= SCHEDULER_MAX_TASKS ||
+        task_table[index].state != SCHEDULER_TASK_RUNNING ||
+        task_table[index].waiting_on != NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_task_t *task = &task_table[index];
+    task->wait_deadline = interrupts_ticks() + ticks;
+    task->has_deadline = true;
+    task->wait_result = SCHEDULER_WAIT_SLEEPING;
+    task->state = SCHEDULER_TASK_BLOCKED;
+    scheduler_irq_restore(flags);
+    while (task_table[index].state == SCHEDULER_TASK_BLOCKED)
+        __asm__ volatile ("sti; hlt; cli" : : : "memory");
+    scheduler_irq_restore(flags);
+    return task_table[index].state == SCHEDULER_TASK_RUNNING &&
+           task_table[index].wait_result == SCHEDULER_WAIT_SLEEP_COMPLETE;
+}
+
+bool scheduler_task_cancel(scheduler_task_id_t task_id) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = find_task_index(task_id);
+    if (index == SCHEDULER_NO_TASK || current_task_index == index ||
+        (task_table[index].state != SCHEDULER_TASK_READY &&
+         task_table[index].state != SCHEDULER_TASK_BLOCKED)) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_remove_waiter_locked(index);
+    task_table[index].has_deadline = false;
+    task_table[index].wait_deadline = 0U;
+    task_table[index].wait_result = SCHEDULER_WAIT_CANCELLED;
+    task_table[index].state = SCHEDULER_TASK_CANCELLED;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+uint64_t scheduler_timer_expiration_count(void) { return timer_expiration_count; }
 
 bool scheduler_wait_queue_wake_one(scheduler_wait_queue_t *queue) {
     const uint64_t flags = scheduler_irq_save_disable();
@@ -451,10 +570,15 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     }
 
     ++preemptive_ticks;
+    scheduler_process_timeouts(interrupts_ticks());
     if (preemptive_ticks >= preemptive_tick_limit) {
         for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
-            if (task_table[i].entry != NULL && task_table[i].state == SCHEDULER_TASK_READY) {
-                task_table[i].state = SCHEDULER_TASK_FAILED;
+            scheduler_task_t *task = &task_table[i];
+            if (task->state == SCHEDULER_TASK_READY || task->state == SCHEDULER_TASK_BLOCKED) {
+                scheduler_remove_waiter_locked(i);
+                task->has_deadline = false;
+                task->wait_deadline = 0U;
+                task->state = SCHEDULER_TASK_FAILED;
                 ++failed_count;
             }
         }
@@ -467,6 +591,22 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
 
     const uint32_t next = find_next_preemptive_task(previous);
     if (next == SCHEDULER_NO_TASK) {
+        if (scheduler_has_blocked_tasks() && bootstrap_frame != NULL) {
+            /* Return to the test/idle caller, but retain the scheduler and its bootstrap frame.
+               A later PIT tick can expire a timed waiter or select one made READY by an event. */
+            current_task_index = SCHEDULER_NO_TASK;
+            return bootstrap_frame;
+        }
+        if (scheduler_has_blocked_tasks()) {
+            for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
+                if (task_table[i].state == SCHEDULER_TASK_BLOCKED) {
+                    scheduler_remove_waiter_locked(i);
+                    task_table[i].state = SCHEDULER_TASK_FAILED;
+                    task_table[i].has_deadline = false;
+                    ++failed_count;
+                }
+            }
+        }
         preemptive_active = false;
         current_task_index = SCHEDULER_NO_TASK;
         void *resume = (void *)bootstrap_frame;
@@ -567,6 +707,112 @@ bool scheduler_blocking_sync_self_test(void) {
     }
     return passed && reaped;
 }
+
+
+static scheduler_wait_queue_t timer_test_timeout_queue;
+static scheduler_wait_queue_t timer_test_cancel_queue;
+static scheduler_task_id_t timer_test_cancel_target_id;
+static volatile uint32_t timer_test_timeout_started;
+static volatile uint32_t timer_test_timeout_completed;
+static volatile uint32_t timer_test_timeout_elapsed;
+static volatile uint32_t timer_test_sleep_completed;
+static volatile uint32_t timer_test_sleep_elapsed;
+static volatile uint32_t timer_test_cancel_started;
+static volatile uint32_t timer_test_cancelled;
+static volatile uint32_t timer_test_cancel_waiter_resumed;
+
+static void timer_test_timeout_waiter(void) {
+    const uint64_t start = interrupts_ticks();
+    timer_test_timeout_started = 1U;
+    const bool signaled = scheduler_wait_queue_wait_timeout(&timer_test_timeout_queue, 4U);
+    timer_test_timeout_elapsed = (uint32_t)(interrupts_ticks() - start);
+    timer_test_timeout_completed = signaled ? 1U : 2U; /* 2 = timeout, 1 = signal */
+}
+static void timer_test_sleep_worker(void) {
+    const uint64_t start = interrupts_ticks();
+    if (scheduler_sleep_ticks(6U)) {
+        timer_test_sleep_elapsed = (uint32_t)(interrupts_ticks() - start);
+        timer_test_sleep_completed = 1U;
+    }
+}
+static void timer_test_cancel_waiter(void) {
+    timer_test_cancel_started = 1U;
+    if (scheduler_wait_queue_wait(&timer_test_cancel_queue))
+        ++timer_test_cancel_waiter_resumed;
+}
+static void timer_test_cancel_controller(void) {
+    uint64_t guard = 0U;
+    while (scheduler_task_state(timer_test_cancel_target_id) != SCHEDULER_TASK_BLOCKED &&
+           guard++ < UINT64_C(1000000))
+        __asm__ volatile ("pause");
+    if (scheduler_task_state(timer_test_cancel_target_id) == SCHEDULER_TASK_BLOCKED &&
+        scheduler_task_cancel(timer_test_cancel_target_id))
+        timer_test_cancelled = 1U;
+}
+
+bool scheduler_timer_timeout_cancel_self_test(void) {
+    scheduler_init();
+    scheduler_wait_queue_init(&timer_test_timeout_queue);
+    scheduler_wait_queue_init(&timer_test_cancel_queue);
+    timer_test_cancel_target_id = 0U;
+    timer_test_timeout_started = 0U;
+    timer_test_timeout_completed = 0U;
+    timer_test_timeout_elapsed = 0U;
+    timer_test_sleep_completed = 0U;
+    timer_test_sleep_elapsed = 0U;
+    timer_test_cancel_started = 0U;
+    timer_test_cancelled = 0U;
+    timer_test_cancel_waiter_resumed = 0U;
+    scheduler_task_id_t timeout_id = 0U, sleep_id = 0U, cancel_id = 0U, controller_id = 0U;
+    if (!scheduler_task_create(timer_test_timeout_waiter, &timeout_id) ||
+        !scheduler_task_create(timer_test_sleep_worker, &sleep_id) ||
+        !scheduler_task_create(timer_test_cancel_waiter, &cancel_id) ||
+        !scheduler_task_create(timer_test_cancel_controller, &controller_id)) return false;
+    timer_test_cancel_target_id = cancel_id;
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    preemptive_tick_limit = 48U;
+    const uint64_t target = interrupts_ticks() + 48U;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+    const bool states_ok =
+        scheduler_task_state(timeout_id) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(sleep_id) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(cancel_id) == SCHEDULER_TASK_CANCELLED &&
+        scheduler_task_state(controller_id) == SCHEDULER_TASK_EXITED;
+    const bool results_ok = timer_test_timeout_started == 1U &&
+        timer_test_timeout_completed == 2U && timer_test_timeout_elapsed >= 4U &&
+        timer_test_sleep_completed == 1U && timer_test_sleep_elapsed >= 6U &&
+        timer_test_cancel_started == 1U && timer_test_cancelled == 1U &&
+        timer_test_cancel_waiter_resumed == 0U &&
+        timer_test_timeout_queue.waiters == 0U && timer_test_cancel_queue.waiters == 0U &&
+        scheduler_timer_expiration_count() >= 2U && scheduler_failed_count() == 0U;
+    const bool reaped = !preemptive_active &&
+        scheduler_task_reap(timeout_id) && scheduler_task_reap(sleep_id) &&
+        scheduler_task_reap(cancel_id) && scheduler_task_reap(controller_id);
+    if (!waited || !states_ok || !results_ok || !reaped) {
+        serial_write("HYBRID: TIMER_TIMEOUT_DIAG states=");
+        serial_write_hex64(scheduler_task_state(timeout_id)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(sleep_id)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(cancel_id)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(controller_id));
+        serial_write(" timeout="); serial_write_hex64(timer_test_timeout_completed);
+        serial_write(" timeout_elapsed="); serial_write_hex64(timer_test_timeout_elapsed);
+        serial_write(" sleep="); serial_write_hex64(timer_test_sleep_completed);
+        serial_write(" sleep_elapsed="); serial_write_hex64(timer_test_sleep_elapsed);
+        serial_write(" cancelled="); serial_write_hex64(timer_test_cancelled);
+        serial_write(" resumed="); serial_write_hex64(timer_test_cancel_waiter_resumed);
+        serial_write(" expirations="); serial_write_hex64(scheduler_timer_expiration_count());
+        serial_write(" failed="); serial_write_hex64(scheduler_failed_count());
+        serial_write("\n");
+    }
+    return waited && states_ok && results_ok && reaped;
+}
+
 
 static scheduler_step_result_t scheduler_lifecycle_probe_step(void *context) {
     if (context == NULL) return SCHEDULER_STEP_COMPLETE;
