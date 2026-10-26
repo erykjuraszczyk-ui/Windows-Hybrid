@@ -1,17 +1,20 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.3.0 — kooperatywny Scheduler Core, CI PASS w QEMU.
+**Aktualny etap:** v0.4.0 — timer-driven preemptive Scheduler Core, weryfikacja przez QEMU.
 
 ## Status
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, podstawowa IDT, test wyjątku i PIT.
-- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin oparty na krótkich krokach zadań.
+- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin typu step/callback.
+- **v0.4.0 — w trakcie walidacji:** przełączanie zapisanych ramek przerwań między dwoma zadaniami kernela wywoływane przez IRQ0; każde zadanie ma własną stronę stosu.
 
-Scheduler v0.3.0 zarządza stałą tablicą maksymalnie 8 zadań, ich stanami oraz przydziałem w cyklu round-robin. Samotest sprawdza kolejność wykonywania, ukończenie zadań, pustą kolejkę i odmowę przekroczenia pojemności.
+## Co testuje v0.4.0
 
-**Ograniczenie:** to planista kooperatywny typu step/callback. Nie przełącza stosów ani rejestrów CPU i nie zapewnia jeszcze preempcji, procesów Ring 3 ani SMP. Nie jest to kompletny system operacyjny ani zamiennik Windows/Linux.
+Test tworzy dwa zadania Ring 0 z oddzielnymi stosami 4 KiB, buduje początkowe ramki zgodne z ISR, a następnie pozwala timerowi PIT przełączać wykonanie między nimi przez ograniczone 12 tyknięć. Po zakończeniu test wraca na zapisany stos bootstrapu, sprawdza progres obu zadań oraz minimalną liczbę przełączeń i zwalnia przydzielone strony.
+
+**Ograniczenia:** to eksperymentalny, jednowątkowy prototyp wywłaszczania zadań jądra na x86-64. Nie ma przejść do Ring 3, TSS/IST, SMP, zapisu stanu FPU/SSE/AVX ani ogólnego API blokowania/wybudzania. Nie jest to kompletny system operacyjny ani zamiennik Windows/Linux. Do czasu przejścia CI v0.4.0 nie jest oznaczona jako zweryfikowana.
 
 ## Uruchomienie
 
@@ -22,16 +25,16 @@ Na Ubuntu/Debian:
     make clean
     make test
 
-Test CI v0.3.0 potwierdził markery `TIMER_OK ticks=5`, `SCHEDULER_SELFTEST_OK dispatches=11` oraz `BOOT_OK`.
+Log poprawnego testu powinien zawierać `TIMER_OK`, `SCHEDULER_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`.
 
-## Dokumentacja projektu
+## Dokumentacja
 
 - [Indeks dokumentów](docs/INDEX.md)
 - [Mapa drogowa](docs/ROADMAP.md)
 - [Architektura](docs/ARCHITECTURE.md)
 - [Model bezpieczeństwa](docs/SECURITY_MODEL.md)
-- [Testowanie i kryteria akceptacji](docs/TESTING.md)
-- [Proces kompilacji i wydań](docs/RELEASE_PROCESS.md)
+- [Testowanie](docs/TESTING.md)
+- [Proces wydań](docs/RELEASE_PROCESS.md)
 - [Status implementacji](docs/IMPLEMENTATION_STATUS.md)
 - [HYBRID OS v0.3.0 — Scheduler Core](docs/BOOTSTRAP_v0.3.0.md)
-- [Zbiorcze specyfikacje v0.1.0–v3.0.0](docs/versions/HYBRID_OS_v0.1.0-v3.0.0.md)
+- [HYBRID OS v0.4.0 — Preemptive Scheduler](docs/BOOTSTRAP_v0.4.0.md)
