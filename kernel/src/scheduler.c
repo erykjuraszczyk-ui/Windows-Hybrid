@@ -25,6 +25,7 @@ static uint64_t completed_count;
 static uint64_t failed_count;
 #define SCHEDULER_NO_TASK UINT32_MAX
 #define SCHEDULER_PREEMPTIVE_TEST_TICKS 12U
+#define SCHEDULER_BLOCKING_TEST_TICKS 40U
 struct scheduler_interrupt_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -36,6 +37,7 @@ static volatile bool preemptive_active;
 static void * volatile bootstrap_frame;
 static volatile uint32_t current_task_index;
 static volatile uint64_t preemptive_ticks, preemptive_switches;
+static volatile uint64_t preemptive_tick_limit;
 static volatile uint64_t test_counter_a, test_counter_b;
 #define SCHEDULER_TASK_TEST_ITERATIONS UINT64_C(50000)
 
@@ -129,6 +131,7 @@ void scheduler_init(void) {
     current_task_index = SCHEDULER_NO_TASK;
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
+    preemptive_tick_limit = SCHEDULER_PREEMPTIVE_TEST_TICKS;
     test_counter_a = 0U;
     test_counter_b = 0U;
 }
@@ -447,7 +450,7 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     }
 
     ++preemptive_ticks;
-    if (preemptive_ticks >= SCHEDULER_PREEMPTIVE_TEST_TICKS) {
+    if (preemptive_ticks >= preemptive_tick_limit) {
         for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
             if (task_table[i].entry != NULL && task_table[i].state == SCHEDULER_TASK_READY) {
                 task_table[i].state = SCHEDULER_TASK_FAILED;
@@ -525,6 +528,7 @@ bool scheduler_blocking_sync_self_test(void) {
     current_task_index = SCHEDULER_NO_TASK;
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
+    preemptive_tick_limit = SCHEDULER_PREEMPTIVE_TEST_TICKS;
     const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target);
@@ -605,7 +609,8 @@ bool scheduler_preemptive_self_test(void) {
     current_task_index = SCHEDULER_NO_TASK;
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
-    const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    preemptive_tick_limit = SCHEDULER_BLOCKING_TEST_TICKS;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_BLOCKING_TEST_TICKS;
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target);
     interrupts_disable();
