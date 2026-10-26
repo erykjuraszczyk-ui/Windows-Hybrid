@@ -652,6 +652,11 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
     for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
         channel->messages[i].type = 0U;
         channel->messages[i].length = 0U;
+        channel->messages[i].protocol_version = 0U;
+        channel->messages[i].kind = SCHEDULER_IPC_KIND_DATA;
+        channel->messages[i].status = SCHEDULER_IPC_STATUS_OK;
+        channel->messages[i].source_service_id = 0U;
+        channel->messages[i].request_id = 0U;
         for (uint32_t j = 0U; j < SCHEDULER_IPC_PAYLOAD_SIZE; ++j)
             channel->messages[i].payload[j] = 0U;
     }
@@ -666,6 +671,9 @@ static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
                                        const scheduler_ipc_message_t *source) {
     destination->type = source->type;
     destination->length = source->length;
+    destination->protocol_version = source->protocol_version;
+    destination->kind = source->kind;
+    destination->status = source->status;
     destination->source_service_id = source->source_service_id;
     destination->request_id = source->request_id;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
@@ -874,6 +882,7 @@ bool scheduler_semaphore_ipc_self_test(void) {
 typedef struct {
     bool active;
     scheduler_ipc_service_id_t id;
+    uint32_t capabilities;
     uint32_t active_calls;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
     scheduler_ipc_channel_t channel;
@@ -909,8 +918,17 @@ static scheduler_ipc_service_t *scheduler_ipc_find_service_locked(
 
 bool scheduler_ipc_service_register(const char *name,
                                     scheduler_ipc_service_id_t *service_id) {
+    return scheduler_ipc_service_register_ex(name,
+        SCHEDULER_IPC_SERVICE_CAP_ONE_WAY |
+        SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE |
+        SCHEDULER_IPC_SERVICE_CAP_EVENTS, service_id);
+}
+
+bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
+                                       scheduler_ipc_service_id_t *service_id) {
     const uint32_t name_length = scheduler_ipc_name_length(name);
-    if (name_length == 0U || service_id == NULL) return false;
+    if (name_length == 0U || service_id == NULL ||
+        (capabilities & ~SCHEDULER_IPC_SERVICE_CAP_ALL) != 0U) return false;
     const uint64_t flags = scheduler_irq_save_disable();
     scheduler_ipc_service_t *free_slot = NULL;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
@@ -927,6 +945,7 @@ bool scheduler_ipc_service_register(const char *name,
     }
     free_slot->active = false;
     free_slot->id = next_ipc_service_id++;
+    free_slot->capabilities = capabilities;
     free_slot->active_calls = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         free_slot->name[i] = '\0';
@@ -953,6 +972,47 @@ bool scheduler_ipc_service_lookup(const char *name,
     }
     scheduler_irq_restore(flags);
     return false;
+}
+
+
+static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t *service,
+                                                   scheduler_ipc_service_info_t *info) {
+    info->id = service->id;
+    info->capabilities = service->capabilities;
+    info->queued_messages = service->channel.count;
+    info->queue_capacity = SCHEDULER_IPC_CAPACITY;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
+        info->name[i] = service->name[i];
+}
+
+bool scheduler_ipc_service_enumerate(uint32_t active_index,
+                                     scheduler_ipc_service_info_t *info) {
+    if (info == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    uint32_t current = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
+        if (!ipc_services[i].active) continue;
+        if (current++ != active_index) continue;
+        scheduler_ipc_service_info_copy_locked(&ipc_services[i], info);
+        scheduler_irq_restore(flags);
+        return true;
+    }
+    scheduler_irq_restore(flags);
+    return false;
+}
+
+bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
+                                    scheduler_ipc_service_info_t *info) {
+    if (info == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_ipc_service_info_copy_locked(service, info);
+    scheduler_irq_restore(flags);
+    return true;
 }
 
 bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id) {
@@ -1027,6 +1087,73 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     --service->active_calls;
     scheduler_irq_restore(finish_flags);
     return received;
+}
+
+
+bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_service_id,
+                                        scheduler_ipc_service_id_t destination_service_id,
+                                        uint32_t request_id,
+                                        const scheduler_ipc_message_t *request) {
+    if (request_id == 0U || !scheduler_ipc_message_valid(request)) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(destination_service_id);
+    const bool allowed = source != NULL && destination != NULL &&
+        (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
+        (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
+    scheduler_irq_restore(flags);
+    if (!allowed) return false;
+
+    scheduler_ipc_message_t message;
+    scheduler_ipc_message_copy(&message, request);
+    message.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+    message.kind = SCHEDULER_IPC_KIND_REQUEST;
+    message.status = SCHEDULER_IPC_STATUS_OK;
+    return scheduler_ipc_service_send(source_service_id, destination_service_id,
+                                      request_id, &message);
+}
+
+bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
+                                 const scheduler_ipc_message_t *request,
+                                 const scheduler_ipc_message_t *response,
+                                 scheduler_ipc_status_t status) {
+    if (request == NULL || !scheduler_ipc_message_valid(response) ||
+        request->protocol_version != SCHEDULER_IPC_PROTOCOL_VERSION ||
+        request->kind != SCHEDULER_IPC_KIND_REQUEST || request->request_id == 0U ||
+        request->source_service_id == 0U ||
+        (uint32_t)status > (uint32_t)SCHEDULER_IPC_STATUS_INTERNAL)
+        return false;
+
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *responder =
+        scheduler_ipc_find_service_locked(responder_service_id);
+    scheduler_ipc_service_t *requester =
+        scheduler_ipc_find_service_locked(request->source_service_id);
+    const bool allowed = responder != NULL && requester != NULL &&
+        (responder->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
+        (requester->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
+    scheduler_irq_restore(flags);
+    if (!allowed) return false;
+
+    scheduler_ipc_message_t message;
+    scheduler_ipc_message_copy(&message, response);
+    message.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+    message.kind = status == SCHEDULER_IPC_STATUS_OK
+        ? SCHEDULER_IPC_KIND_RESPONSE : SCHEDULER_IPC_KIND_ERROR;
+    message.status = status;
+    return scheduler_ipc_service_send(responder_service_id,
+                                      request->source_service_id,
+                                      request->request_id, &message);
+}
+
+bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *message,
+                                           uint32_t request_id) {
+    return message != NULL && request_id != 0U &&
+        message->protocol_version == SCHEDULER_IPC_PROTOCOL_VERSION &&
+        message->request_id == request_id &&
+        (message->kind == SCHEDULER_IPC_KIND_RESPONSE ||
+         message->kind == SCHEDULER_IPC_KIND_ERROR);
 }
 
 uint32_t scheduler_ipc_service_count(void) {
