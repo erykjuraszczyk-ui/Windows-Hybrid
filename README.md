@@ -1,26 +1,26 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.4.0 — timer-driven Preemptive Scheduler, CI PASS w skonfigurowanym QEMU.
+**Aktualny etap:** v0.5.0 — Task Lifecycle oraz GDT/TSS/IST; walidacja przez CI/QEMU w toku.
 
-## Status
+## Historia statusu
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
-- **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, podstawowa IDT, test wyjątku i PIT.
-- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin typu step/callback.
-- **v0.4.0 — CI PASS w QEMU:** ograniczony test wywłaszczania dwóch zadań Ring 0 przez IRQ0, każde z własnym stosem 4 KiB i pełną ramką kontekstu long mode.
+- **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, IDT, wyjątek i PIT.
+- **v0.3.0 — CI PASS w QEMU:** kooperatywny scheduler round-robin.
+- **v0.4.0 — CI PASS w QEMU:** test przełączania kontekstu dwóch zadań Ring 0 przez IRQ0.
+- **v0.5.0 — w trakcie walidacji:** własne GDT/TSS, stosy IST dla krytycznych wyjątków, tworzenie/zakończenie/reaping zadań i test odzyskiwania stron stosów.
 
-## Co potwierdza v0.4.0
+## Zakres v0.5.0
 
-Przebieg CI [#40299062307](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40299062307) zakończył się sukcesem. Log zawiera:
-- `HYBRID: TIMER_OK ticks=5`
-- `HYBRID: SCHEDULER_SELFTEST_OK dispatches=11`
-- `HYBRID: PREEMPTIVE_SELFTEST_OK switches=10` z dodatnimi licznikami obu zadań
-- `HYBRID: BOOT_OK`
+- Instalacja własnej tablicy GDT z selektorami Ring 0 i deskryptorem TSS 64-bit.
+- TSS zawiera osobny stos wejścia Ring 0 oraz cztery niezależne stosy IST.
+- IDT przypisuje IST1 do #DF, IST2 do #GP, IST3 do #PF i IST4 do NMI.
+- Task API nadaje niezerowe, monotoniczne identyfikatory, prowadzi stany READY/RUNNING/EXITED/FAILED i odrzuca próbę odzyskania stosu zadania, które jeszcze wykonuje się na tym stosie.
+- Reaping jest odroczony do chwili, gdy scheduler wróci ze stosu zadania; potem zwalniana jest strona stosu i slot może zostać ponownie użyty bez ponownego użycia identyfikatora.
+- CI w QEMU sprawdza TSS/IST, cykl życia zadania, naturalne zakończenie dwóch zadań oraz odzyskanie stron stosów.
 
-Test używa PIC/PIT w QEMU z `-cpu qemu64,-apic`. Pełna ramka kontekstu obejmuje rejestry, vector/error code, RIP/CS/RFLAGS oraz RSP/SS, a po 12 tyknięciach scheduler wraca do zapisanego kontekstu bootstrapu.
-
-**Ograniczenia:** to eksperymentalny, jednordzeniowy prototyp wywłaszczania zadań jądra Ring 0. Nie ma przejść do Ring 3, TSS/IST, SMP, zapisu stanu FPU/SSE/AVX ani ogólnego API blokowania/wybudzania. CI PASS potwierdza ten test w QEMU, nie zgodność z fizycznym sprzętem ani gotowość produkcyjną.
+**Granice bezpieczeństwa:** wszystkie zadania nadal działają w Ring 0. TSS/IST zapewnia osobne stosy obsługi wejść i wyjątków, ale nie tworzy izolacji procesów ani sandboxa. Nie ma jeszcze Ring 3, SMP, zapisu FPU/SSE/AVX, blokowania/wybudzania ani kontrolowanego testu #DF przez fault-injection. Wynik QEMU nie jest certyfikacją fizycznego sprzętu.
 
 ## Uruchomienie
 
@@ -31,7 +31,7 @@ Na Ubuntu/Debian:
     make clean
     make test
 
-Test wymaga markerów `TIMER_OK`, `SCHEDULER_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` i `BOOT_OK`.
+Log poprawnego testu powinien zawierać: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`.
 
 ## Dokumentacja
 
@@ -42,5 +42,5 @@ Test wymaga markerów `TIMER_OK`, `SCHEDULER_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_
 - [Testowanie](docs/TESTING.md)
 - [Proces wydań](docs/RELEASE_PROCESS.md)
 - [Status implementacji](docs/IMPLEMENTATION_STATUS.md)
-- [HYBRID OS v0.3.0 — Scheduler Core](docs/BOOTSTRAP_v0.3.0.md)
 - [HYBRID OS v0.4.0 — Preemptive Scheduler](docs/BOOTSTRAP_v0.4.0.md)
+- [HYBRID OS v0.5.0 — Task Lifecycle, TSS/IST](docs/BOOTSTRAP_v0.5.0.md)
