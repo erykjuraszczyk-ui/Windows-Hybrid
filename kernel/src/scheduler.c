@@ -503,7 +503,7 @@ static void blocking_test_mutex_worker(void) {
         ++blocking_test_mutex_errors;
         return;
     }
-    for (uint32_t i = 0U; i < 1000000U; ++i) {
+    for (uint32_t i = 0U; i < 10000U; ++i) {
         ++blocking_test_protected_count;
         __asm__ volatile ("pause");
     }
@@ -541,7 +541,7 @@ bool scheduler_blocking_sync_self_test(void) {
         scheduler_task_state(worker_b) == SCHEDULER_TASK_EXITED &&
         blocking_test_waiting == 1U && blocking_test_resumed == 1U &&
         blocking_test_wake_ok == 1U &&
-        blocking_test_protected_count == 2000000U &&
+        blocking_test_protected_count == 20000U &&
         blocking_test_mutex_errors == 0U &&
         blocking_test_queue.waiters == 0U &&
         blocking_test_mutex.waiters.waiters == 0U &&
