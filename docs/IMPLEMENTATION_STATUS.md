@@ -9,16 +9,23 @@ Wyniki dotyczą skonfigurowanego emulatora; nie są certyfikacją pracy na fizyc
 
 ## HYBRID OS v0.3.0 — Scheduler Core
 
-Gałąź `feat/hybrid-os-v0.3.0-scheduler` dodaje:
+**CI PASS w QEMU** dla kodu planisty i testów kernela:
+https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40291915227
+
+Potwierdzone markery logu:
+- `HYBRID: TIMER_OK ticks=0x0000000000000005`
+- `HYBRID: SCHEDULER_SELFTEST_OK dispatches=0x000000000000000B`
+- `HYBRID: BOOT_OK`
+
+Artefakt `hybrid-os-v0.3.0` został utworzony przez CI. Sukces dotyczy kontrolowanego środowiska QEMU.
+
+Implementacja zawiera:
 - stałą tablicę 8 zadań i identyfikatory zadań;
 - stany UNUSED, READY, RUNNING, EXITED i FAILED;
 - kooperatywne wywołanie pojedynczego kroku zadania;
 - planowanie round-robin i liczniki wywołań, zakończeń oraz awarii;
 - zabezpieczenie przed ponownym wejściem do planisty oraz odmowę dodania zadań poza limitem;
-- test kolejności A, B, C, A, B, B, test ukończenia i test pojemności;
-- dodatkowy marker wymagany przez test rozruchu QEMU.
-
-**Status v0.3.0: oczekuje na wynik CI.** Test jest zaliczony tylko wtedy, gdy build i QEMU sprawdzą również `HYBRID: SCHEDULER_SELFTEST_OK`.
+- test kolejności A, B, C, A, B, B, test ukończenia i test pojemności.
 
 ## Ograniczenia
 

@@ -1,13 +1,13 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.3.0 — kooperatywny Scheduler Core, weryfikacja przez QEMU.
+**Aktualny etap:** v0.3.0 — kooperatywny Scheduler Core, CI PASS w QEMU.
 
 ## Status
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, podstawowa IDT, test wyjątku i PIT.
-- **v0.3.0 — w trakcie walidacji:** kooperatywny planista round-robin oparty na krótkich krokach zadań.
+- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin oparty na krótkich krokach zadań.
 
 Scheduler v0.3.0 zarządza stałą tablicą maksymalnie 8 zadań, ich stanami oraz przydziałem w cyklu round-robin. Samotest sprawdza kolejność wykonywania, ukończenie zadań, pustą kolejkę i odmowę przekroczenia pojemności.
 
@@ -22,7 +22,7 @@ Na Ubuntu/Debian:
     make clean
     make test
 
-Test oczekuje markerów rozruchu, pamięci, IDT, wyjątku, timera oraz `HYBRID: SCHEDULER_SELFTEST_OK`.
+Test CI v0.3.0 potwierdził markery `TIMER_OK ticks=5`, `SCHEDULER_SELFTEST_OK dispatches=11` oraz `BOOT_OK`.
 
 ## Dokumentacja projektu
 
