@@ -1,30 +1,31 @@
 # Status implementacji i ograniczenia
 
-## Potwierdzona baza v0.1.0
+## Potwierdzona baza v0.1.0–v0.2.0
 
-Przebieg CI dla v0.1.0 zakończył się powodzeniem:
-https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40225741501
+- v0.1.0: CI potwierdziło kompilację ELF64, utworzenie obrazu ISO i minimalny rozruch QEMU.
+- v0.2.0: wymagane przebiegi GitHub Actions zakończyły się powodzeniem w konfiguracji QEMU z `-cpu qemu64,-apic`. Testy obejmowały mapę pamięci, alokator stron, IDT, ścieżkę int3 i pięć tyknięć PIT.
 
-Potwierdzono kompilację ELF64, utworzenie ISO BIOS/UEFI i minimalny rozruch QEMU ze znacznikami KERNEL_START, FRAMEBUFFER_OK i BOOT_OK.
+Wyniki dotyczą skonfigurowanego emulatora; nie są certyfikacją pracy na fizycznym sprzęcie.
 
-## Zakres v0.2.0
+## HYBRID OS v0.3.0 — Scheduler Core
 
-Gałąź feat/hybrid-os-v0.2.0 dodaje:
-- mapę pamięci Limine oraz alokator fizycznych stron z bitmapami zajętości i przydziału;
-- zerowanie stron, walidację zwalniania i test regresyjny podwójnego zwolnienia;
-- IDT x86-64 i zestaw stubów wyjątków;
-- test ścieżki #BP / int3;
-- PIC/PIT i test pięciu tyknięć zegara;
-- workflow QEMU sprawdzający znaczniki diagnostyczne.
+Gałąź `feat/hybrid-os-v0.3.0-scheduler` dodaje:
+- stałą tablicę 8 zadań i identyfikatory zadań;
+- stany UNUSED, READY, RUNNING, EXITED i FAILED;
+- kooperatywne wywołanie pojedynczego kroku zadania;
+- planowanie round-robin i liczniki wywołań, zakończeń oraz awarii;
+- zabezpieczenie przed ponownym wejściem do planisty oraz odmowę dodania zadań poza limitem;
+- test kolejności A, B, C, A, B, B, test ukończenia i test pojemności;
+- dodatkowy marker wymagany przez test rozruchu QEMU.
 
-**Status v0.2.0: oczekuje na wynik CI.** Kod nie jest zweryfikowany do momentu, w którym kompilacja i wszystkie testy QEMU przejdą.
+**Status v0.3.0: oczekuje na wynik CI.** Test jest zaliczony tylko wtedy, gdy build i QEMU sprawdzą również `HYBRID: SCHEDULER_SELFTEST_OK`.
 
 ## Ograniczenia
 
-- Testy QEMU nie dowodzą zgodności z fizycznym sprzętem.
-- Kernel pozostaje jednowątkowy; brak SMP, planisty, procesów Ring 3, VFS, syscall ABI i zarządzania wirtualną pamięcią przez kernel.
-- Wyjątki korzystają z podstawowych bramek IDT; nie skonfigurowano osobnych stosów IST/TSS dla #DF ani APIC.
-- PIC/PIT to etap testowy, nie docelowy model przerwań dla współczesnego sprzętu.
-- Alokator fizyczny korzysta z HHDM Limine i rezerwuje pamięć metadanych bitmap.
+- Scheduler jest kooperatywny i step-based; callback musi zwrócić sterowanie. Nie ma stosów zadań, przełączania kontekstu CPU, preempcji ani scheduler tick w ISR.
+- Brak SMP, procesów Ring 3, syscall ABI, VFS, IPC oraz zarządzania pamięcią wirtualną przez kernel.
+- Wyjątki korzystają z podstawowych bramek IDT; nie skonfigurowano osobnych stosów IST/TSS dla #DF ani docelowego APIC.
+- PIC/PIT pozostają ścieżką testową dla prototypu.
+- Testy QEMU nie dowodzą poprawności na fizycznym sprzęcie.
 
 Każda funkcja poza zakresem wykonanego testu ma status SPECIFIED / NOT VERIFIED.

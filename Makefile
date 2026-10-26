@@ -8,7 +8,7 @@ LIMINE_BINARY_SHA256 := 847334bc4bc142de996fbd132806b89ed73ac9ab34dbc1e90cfebf1f
 LIMINE_PROTOCOL_COMMIT := 3a0526b700e356f0eac1b71a77697b3fd1c707a3
 LIMINE_DIR := $(BUILD_DIR)/limine-binary
 PROTOCOL_DIR := $(BUILD_DIR)/limine-protocol
-KERNEL_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/interrupts.o $(BUILD_DIR)/interrupt_stubs.o
+KERNEL_OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/interrupts.o $(BUILD_DIR)/interrupt_stubs.o
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 ISO_ROOT := $(BUILD_DIR)/iso_root
 ISO_IMAGE := $(BUILD_DIR)/hybrid.iso
@@ -46,7 +46,7 @@ $(PROTOCOL_DIR)/.pinned:
 	git -C $(PROTOCOL_DIR) checkout --detach $(LIMINE_PROTOCOL_COMMIT)
 	@touch $@
 
-$(BUILD_DIR)/main.o: kernel/src/main.c kernel/linker.ld kernel/src/console.h kernel/src/memory.h kernel/src/interrupts.h $(PROTOCOL_DIR)/.pinned
+$(BUILD_DIR)/main.o: kernel/src/main.c kernel/linker.ld kernel/src/console.h kernel/src/memory.h kernel/src/interrupts.h kernel/src/scheduler.h $(PROTOCOL_DIR)/.pinned
 	$(CC) $(CFLAGS) -Ikernel/src -I$(PROTOCOL_DIR)/include -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/src/console.c kernel/src/console.h
@@ -56,6 +56,10 @@ $(BUILD_DIR)/console.o: kernel/src/console.c kernel/src/console.h
 $(BUILD_DIR)/memory.o: kernel/src/memory.c kernel/src/memory.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Ikernel/src -I$(PROTOCOL_DIR)/include -c $< -o $@
+
+$(BUILD_DIR)/scheduler.o: kernel/src/scheduler.c kernel/src/scheduler.h
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -Ikernel/src -c $< -o $@
 
 $(BUILD_DIR)/interrupts.o: kernel/src/interrupts.c kernel/src/interrupts.h kernel/src/console.h
 	@mkdir -p $(BUILD_DIR)
