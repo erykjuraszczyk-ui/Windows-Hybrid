@@ -6,9 +6,12 @@
 
 typedef struct {
     scheduler_task_id_t id;
-    scheduler_task_state_t state;
+    volatile scheduler_task_state_t state;
     scheduler_step_fn step;
     void *context;
+    scheduler_task_entry_fn entry;
+    void * volatile saved_frame;
+    uint64_t stack_physical;
 } scheduler_task_t;
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
@@ -118,7 +121,7 @@ bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task
 }
 
 bool scheduler_run_once(void) {
-    if (dispatch_in_progress) return false;
+    if (dispatch_in_progress || preemptive_active) return false;
     scheduler_task_t *selected = NULL;
     uint32_t selected_index = 0U;
     for (uint32_t offset = 0U; offset < SCHEDULER_MAX_TASKS; ++offset) {
