@@ -70,7 +70,7 @@ uint32_t scheduler_wait_queue_wake_all(scheduler_wait_queue_t *queue);
 void scheduler_mutex_init(scheduler_mutex_t *mutex);
 bool scheduler_mutex_lock(scheduler_mutex_t *mutex);
 bool scheduler_mutex_unlock(scheduler_mutex_t *mutex);
-void scheduler_semaphore_init(scheduler_semaphore_t *semaphore, uint32_t initial_count, uint32_t max_count);
+bool scheduler_semaphore_init(scheduler_semaphore_t *semaphore, uint32_t initial_count, uint32_t max_count);
 bool scheduler_semaphore_wait(scheduler_semaphore_t *semaphore);
 bool scheduler_semaphore_post(scheduler_semaphore_t *semaphore);
 void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel);
