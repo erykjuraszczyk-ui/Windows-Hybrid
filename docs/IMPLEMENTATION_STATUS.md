@@ -10,7 +10,7 @@
 
 ## HYBRID OS v0.6.0 — Task Blocking, Wakeup & Synchronization Core
 
-**CI PASS w skonfigurowanym QEMU.** Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40310647220.
+**CI PASS w skonfigurowanym QEMU.** Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40311257137.
 
 Dodano:
 - stan `SCHEDULER_TASK_BLOCKED` i wynik kroku `SCHEDULER_STEP_BLOCK`;
@@ -29,4 +29,4 @@ Wymagane markery CI: `TSS_OK`, `IDT_OK`, `IST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`,
 - Brak Ring 3, SMP, zapisu i odtwarzania FPU/SSE/AVX, blokad z dziedziczeniem priorytetów oraz pełnego schedulera produkcyjnego.
 - TSS/IST sprawdzane jest strukturalnie; wymuszone testy fault-injection #DF/#PF pozostają poza zakresem.
 
-Status v0.6.0 dotyczy źródła testowanego na commicie `8897d975874b26ef3dfe891ed2c09c0e4643cd63`. Dokumentacja została zaktualizowana po tym przebiegu; PR uruchamia ponowne CI dla aktualnego nagłówka.
+Status v0.6.0 dotyczy źródła testowanego na commicie `a449e6e7c6d077ddef0d19f4f23685aa0aa8ad7a`. Dokumentacja została zaktualizowana po tym przebiegu; PR uruchamia ponowne CI dla aktualnego nagłówka.
