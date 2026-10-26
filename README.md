@@ -12,7 +12,7 @@
 - **v0.5.0 — CI PASS w QEMU:** GDT/TSS/IST, cykl życia zadań i odzyskiwanie stron stosów.
 - **v0.6.0 — CI PASS w QEMU:** stany BLOCKED/READY, wait queues, wybudzanie, mutex z przekazaniem własności i testy synchronizacji.
 
-Potwierdzający przebieg: [GitHub Actions #40310647220](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40310647220). Log zawiera `SYNC_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`; artefakt `hybrid-os-v0.6.0` zawiera kernel ELF, ISO i logi QEMU.
+Potwierdzający przebieg: [GitHub Actions #40310647220](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40311257137). Log zawiera `SYNC_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`; artefakt `hybrid-os-v0.6.0` zawiera kernel ELF, ISO i logi QEMU.
 
 ## Zakres v0.6.0
 
