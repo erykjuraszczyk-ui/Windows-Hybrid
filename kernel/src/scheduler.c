@@ -1,4 +1,5 @@
 #include "scheduler.h"
+#include "console.h"
 #include "interrupts.h"
 #include "memory.h"
 #include <stddef.h>
@@ -64,6 +65,9 @@ static uint32_t find_next_preemptive_task(uint32_t after_index) {
 static void scheduler_task_trampoline(void) __attribute__((noreturn));
 static void scheduler_task_trampoline(void) {
     const uint32_t index = current_task_index;
+    interrupts_disable();
+    serial_write("HYBRID: PREEMPTIVE_TASK_ENTRY\\n");
+    interrupts_enable();
     if (index < SCHEDULER_MAX_TASKS && task_table[index].entry != NULL)
         task_table[index].entry();
     __asm__ volatile ("cli" : : : "memory");
@@ -218,7 +222,10 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     }
 
     ++preemptive_ticks;
+    if (preemptive_ticks == 1U) serial_write("HYBRID: PREEMPTIVE_TICK1\\n");
+    if (preemptive_ticks == 2U) serial_write("HYBRID: PREEMPTIVE_TICK2\\n");
     if (preemptive_ticks >= SCHEDULER_PREEMPTIVE_TEST_TICKS) {
+        serial_write("HYBRID: PREEMPTIVE_RETURN_BOOT\\n");
         preemptive_active = false;
         current_task_index = SCHEDULER_NO_TASK;
         void *resume = (void *)bootstrap_frame;
@@ -269,6 +276,7 @@ bool scheduler_preemptive_self_test(void) {
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
     const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    serial_write("HYBRID: PREEMPTIVE_START\\n");
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target);
     interrupts_disable();
