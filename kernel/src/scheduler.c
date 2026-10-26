@@ -1,6 +1,7 @@
 #include "scheduler.h"
 #include "interrupts.h"
 #include "memory.h"
+#include "console.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -545,8 +546,25 @@ bool scheduler_blocking_sync_self_test(void) {
         blocking_test_queue.waiters == 0U &&
         blocking_test_mutex.waiters.waiters == 0U &&
         blocking_test_mutex.locked == 0U && blocking_test_mutex.owner == 0U;
-    const bool reaped = scheduler_task_reap(waiter) && scheduler_task_reap(signaler) &&
+    const bool reaped = passed && scheduler_task_reap(waiter) && scheduler_task_reap(signaler) &&
         scheduler_task_reap(worker_a) && scheduler_task_reap(worker_b);
+    if (!passed || !reaped) {
+        serial_write("HYBRID: BLOCKING_DIAG states=");
+        serial_write_hex64(scheduler_task_state(waiter)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(signaler)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(worker_a)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(worker_b));
+        serial_write(" wake="); serial_write_hex64(blocking_test_wake_ok);
+        serial_write(" resumed="); serial_write_hex64(blocking_test_resumed);
+        serial_write(" count="); serial_write_hex64(blocking_test_protected_count);
+        serial_write(" mutex_errors="); serial_write_hex64(blocking_test_mutex_errors);
+        serial_write(" q="); serial_write_hex64(blocking_test_queue.waiters);
+        serial_write(" mq="); serial_write_hex64(blocking_test_mutex.waiters.waiters);
+        serial_write(" locked="); serial_write_hex64(blocking_test_mutex.locked);
+        serial_write(" ticks="); serial_write_hex64(preemptive_ticks);
+        serial_write(" active="); serial_write_hex64(preemptive_active ? 1U : 0U);
+        serial_write("\\n");
+    }
     return passed && reaped;
 }
 
