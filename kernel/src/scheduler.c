@@ -27,9 +27,10 @@ static uint64_t failed_count;
 struct scheduler_interrupt_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
-    uint64_t vector, error_code, rip, cs, rflags;
+    uint64_t vector, error_code, rip, cs, rflags, rsp, ss;
 };
-_Static_assert(sizeof(struct scheduler_interrupt_frame) == 160U, "ISR frame layout mismatch");
+_Static_assert(sizeof(struct scheduler_interrupt_frame) == 176U,
+               "64-bit interrupt frame must include RSP and SS");
 static volatile bool preemptive_active;
 static void * volatile bootstrap_frame;
 static volatile uint32_t current_task_index;
@@ -52,6 +53,11 @@ static uint16_t scheduler_current_cs(void) {
     __asm__ volatile ("mov %%cs, %0" : "=r"(selector));
     return selector;
 }
+static uint16_t scheduler_current_ss(void) {
+    uint16_t selector;
+    __asm__ volatile ("mov %%ss, %0" : "=r"(selector));
+    return selector;
+}
 static uint32_t find_next_preemptive_task(uint32_t after_index) {
     const uint32_t start = after_index == SCHEDULER_NO_TASK ? SCHEDULER_MAX_TASKS - 1U : after_index;
     for (uint32_t offset = 1U; offset <= SCHEDULER_MAX_TASKS; ++offset) {
@@ -65,9 +71,6 @@ static uint32_t find_next_preemptive_task(uint32_t after_index) {
 static void scheduler_task_trampoline(void) __attribute__((noreturn));
 static void scheduler_task_trampoline(void) {
     const uint32_t index = current_task_index;
-    interrupts_disable();
-    serial_write("HYBRID: PREEMPTIVE_TASK_ENTRY\n");
-    interrupts_enable();
     if (index < SCHEDULER_MAX_TASKS && task_table[index].entry != NULL)
         task_table[index].entry();
     __asm__ volatile ("cli" : : : "memory");
@@ -190,21 +193,14 @@ bool scheduler_create_preemptive_task(scheduler_task_entry_fn entry, scheduler_t
     struct scheduler_interrupt_frame *frame =
         (struct scheduler_interrupt_frame *)(top - sizeof(*frame));
     uint64_t *words = (uint64_t *)frame;
-    for (uint32_t i = 0U; i < 20U; ++i) words[i] = 0U;
+    for (uint32_t i = 0U; i < 22U; ++i) words[i] = 0U;
     frame->vector = 32U;
     frame->error_code = 0U;
     frame->rip = (uint64_t)(uintptr_t)scheduler_task_trampoline;
     frame->cs = (uint64_t)scheduler_current_cs();
     frame->rflags = UINT64_C(0x202);
-    serial_write("HYBRID: TASK_FRAME rip=");
-    serial_write_hex64(frame->rip);
-    serial_write(" cs=");
-    serial_write_hex64(frame->cs);
-    serial_write(" flags=");
-    serial_write_hex64(frame->rflags);
-    serial_write(" stack=");
-    serial_write_hex64(top);
-    serial_write("\n");
+    frame->rsp = (uint64_t)top;
+    frame->ss = (uint64_t)scheduler_current_ss();
 
     scheduler_task_t *task = &task_table[index];
     task->id = next_task_id++;
@@ -231,10 +227,7 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     }
 
     ++preemptive_ticks;
-    if (preemptive_ticks == 1U) serial_write("HYBRID: PREEMPTIVE_TICK1\n");
-    if (preemptive_ticks == 2U) serial_write("HYBRID: PREEMPTIVE_TICK2\n");
     if (preemptive_ticks >= SCHEDULER_PREEMPTIVE_TEST_TICKS) {
-        serial_write("HYBRID: PREEMPTIVE_RETURN_BOOT\n");
         preemptive_active = false;
         current_task_index = SCHEDULER_NO_TASK;
         void *resume = (void *)bootstrap_frame;
@@ -253,9 +246,6 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     if (previous < SCHEDULER_MAX_TASKS && previous != next) ++preemptive_switches;
     task_table[next].state = SCHEDULER_TASK_RUNNING;
     current_task_index = next;
-    serial_write("HYBRID: PREEMPTIVE_DISPATCH frame=");
-    serial_write_hex64((uint64_t)(uintptr_t)task_table[next].saved_frame);
-    serial_write("\n");
     return (void *)task_table[next].saved_frame;
 }
 
