@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <limine.h>
 #include "console.h"
+#include "arch_tables.h"
 #include "interrupts.h"
 #include "memory.h"
 #include "scheduler.h"
@@ -202,7 +203,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
               unit, icon_size - unit * 4U, white);
 
     draw_centered(fb, fb->height / 2U, "HYBRID OS", unit, white);
-    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.4.0", unit, cyan);
+    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.5.0", unit, cyan);
     draw_centered(fb, fb->height / 2U + unit * 22U, "BOOT OK", 2U, white);
     draw_centered(fb, fb->height - 24U, "X86-64 / UEFI", 1U, muted);
     rectangle(fb, 0U, 0U, fb->width, 4U, cyan);
@@ -210,8 +211,9 @@ static bool draw_splash(struct limine_framebuffer *fb) {
 }
 
 void kmain(void) {
+    __asm__ volatile ("cli" : : : "memory");
     console_init();
-    serial_write("\nHYBRID OS v0.4.0\n");
+    serial_write("\nHYBRID OS v0.5.0\n");
     serial_write("HYBRID: KERNEL_START\n");
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
@@ -243,11 +245,25 @@ void kmain(void) {
     if (framebuffer_ready) serial_write("HYBRID: FRAMEBUFFER_OK\n");
     else serial_write("HYBRID: FRAMEBUFFER_UNAVAILABLE\n");
 
+    if (!arch_tables_init()) {
+        serial_write("HYBRID: FAIL_TSS_INIT\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: TSS_OK\n");
+    if (!arch_tables_self_test()) {
+        serial_write("HYBRID: FAIL_TSS_SELFTEST\n");
+        cpu_halt();
+    }
     if (!interrupts_init()) {
         serial_write("HYBRID: FAIL_IDT_INIT\n");
         cpu_halt();
     }
     serial_write("HYBRID: IDT_OK\n");
+    if (!interrupts_ist_self_test()) {
+        serial_write("HYBRID: FAIL_IST_SELFTEST\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IST_OK\n");
     if (!interrupts_self_test()) {
         serial_write("HYBRID: FAIL_EXCEPTION_SELFTEST\n");
         cpu_halt();
@@ -272,6 +288,11 @@ void kmain(void) {
     serial_write("HYBRID: SCHEDULER_SELFTEST_OK dispatches=");
     serial_write_hex64(scheduler_dispatch_count());
     serial_write("\n");
+    if (!scheduler_task_lifecycle_self_test()) {
+        serial_write("HYBRID: FAIL_TASK_LIFECYCLE\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: TASK_LIFECYCLE_SELFTEST_OK\n");
     if (!scheduler_preemptive_self_test()) {
         serial_write("HYBRID: FAIL_PREEMPTIVE_SCHEDULER\n");
         cpu_halt();
