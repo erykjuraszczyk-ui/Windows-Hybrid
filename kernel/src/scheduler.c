@@ -12,6 +12,7 @@ typedef struct {
     scheduler_task_entry_fn entry;
     void * volatile saved_frame;
     uint64_t stack_physical;
+    scheduler_wait_queue_t *waiting_on;
 } scheduler_task_t;
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
@@ -112,6 +113,7 @@ void scheduler_init(void) {
         task_table[i].entry = NULL;
         task_table[i].saved_frame = NULL;
         task_table[i].stack_physical = 0U;
+        task_table[i].waiting_on = NULL;
     }
     scheduler_cursor = 0U;
     if (!scheduler_ever_initialized) {
@@ -151,6 +153,7 @@ bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task
     task->entry = NULL;
     task->saved_frame = NULL;
     task->stack_physical = 0U;
+    task->waiting_on = NULL;
     *task_id = task->id;
     scheduler_irq_restore(flags);
     return true;
@@ -250,6 +253,7 @@ bool scheduler_task_create(scheduler_task_entry_fn entry, scheduler_task_id_t *t
     task->entry = entry;
     task->saved_frame = frame;
     task->stack_physical = physical;
+    task->waiting_on = NULL;
     *task_id = task->id;
     scheduler_irq_restore(flags);
     return true;
@@ -261,7 +265,7 @@ bool scheduler_task_reap(scheduler_task_id_t task_id) {
     const uint64_t flags = scheduler_irq_save_disable();
     const uint32_t index = find_task_index(task_id);
     if (index == SCHEDULER_NO_TASK || preemptive_active ||
-        current_task_index == index ||
+        current_task_index == index || task_table[index].waiting_on != NULL ||
         (task_table[index].state != SCHEDULER_TASK_EXITED &&
          task_table[index].state != SCHEDULER_TASK_FAILED)) {
         scheduler_irq_restore(flags);
@@ -279,6 +283,152 @@ bool scheduler_task_reap(scheduler_task_id_t task_id) {
     task_table[index].entry = NULL;
     task_table[index].saved_frame = NULL;
     task_table[index].stack_physical = 0U;
+    task_table[index].waiting_on = NULL;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_task_block(scheduler_task_id_t task_id) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = find_task_index(task_id);
+    if (index == SCHEDULER_NO_TASK || dispatch_in_progress || preemptive_active ||
+        task_table[index].state != SCHEDULER_TASK_READY) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    task_table[index].state = SCHEDULER_TASK_BLOCKED;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_task_wake(scheduler_task_id_t task_id) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = find_task_index(task_id);
+    if (index == SCHEDULER_NO_TASK ||
+        task_table[index].state != SCHEDULER_TASK_BLOCKED ||
+        task_table[index].waiting_on != NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    task_table[index].state = SCHEDULER_TASK_READY;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+void scheduler_wait_queue_init(scheduler_wait_queue_t *queue) {
+    if (queue == NULL) return;
+    const uint64_t flags = scheduler_irq_save_disable();
+    queue->waiters = 0U;
+    scheduler_irq_restore(flags);
+}
+
+static bool wait_queue_wake_one_locked(scheduler_wait_queue_t *queue) {
+    if (queue == NULL) return false;
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
+        const uint32_t bit = UINT32_C(1) << i;
+        if ((queue->waiters & bit) == 0U) continue;
+        queue->waiters &= ~bit;
+        if (task_table[i].waiting_on == queue &&
+            task_table[i].state == SCHEDULER_TASK_BLOCKED) {
+            task_table[i].waiting_on = NULL;
+            task_table[i].state = SCHEDULER_TASK_READY;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool scheduler_wait_queue_wait(scheduler_wait_queue_t *queue) {
+    if (queue == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = current_task_index;
+    if (!preemptive_active || index >= SCHEDULER_MAX_TASKS ||
+        task_table[index].state != SCHEDULER_TASK_RUNNING ||
+        task_table[index].waiting_on != NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    queue->waiters |= UINT32_C(1) << index;
+    task_table[index].waiting_on = queue;
+    task_table[index].state = SCHEDULER_TASK_BLOCKED;
+    scheduler_irq_restore(flags);
+    while (task_table[index].state == SCHEDULER_TASK_BLOCKED)
+        __asm__ volatile ("sti; hlt; cli" : : : "memory");
+    scheduler_irq_restore(flags);
+    return task_table[index].state == SCHEDULER_TASK_RUNNING;
+}
+
+bool scheduler_wait_queue_wake_one(scheduler_wait_queue_t *queue) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const bool woke = wait_queue_wake_one_locked(queue);
+    scheduler_irq_restore(flags);
+    return woke;
+}
+
+uint32_t scheduler_wait_queue_wake_all(scheduler_wait_queue_t *queue) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    uint32_t count = 0U;
+    while (wait_queue_wake_one_locked(queue)) ++count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
+void scheduler_mutex_init(scheduler_mutex_t *mutex) {
+    if (mutex == NULL) return;
+    const uint64_t flags = scheduler_irq_save_disable();
+    mutex->locked = 0U;
+    mutex->owner = 0U;
+    mutex->waiters.waiters = 0U;
+    scheduler_irq_restore(flags);
+}
+
+bool scheduler_mutex_lock(scheduler_mutex_t *mutex) {
+    if (mutex == NULL) return false;
+    for (;;) {
+        const uint64_t flags = scheduler_irq_save_disable();
+        const uint32_t index = current_task_index;
+        if (!preemptive_active || index >= SCHEDULER_MAX_TASKS ||
+            task_table[index].state != SCHEDULER_TASK_RUNNING) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (mutex->locked == 0U) {
+            mutex->locked = 1U;
+            mutex->owner = task_table[index].id;
+            scheduler_irq_restore(flags);
+            return true;
+        }
+        if (mutex->owner == task_table[index].id) {
+            scheduler_irq_restore(flags);
+            return false; /* non-recursive mutex */
+        }
+        if (task_table[index].waiting_on != NULL) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        mutex->waiters.waiters |= UINT32_C(1) << index;
+        task_table[index].waiting_on = &mutex->waiters;
+        task_table[index].state = SCHEDULER_TASK_BLOCKED;
+        scheduler_irq_restore(flags);
+        while (task_table[index].state == SCHEDULER_TASK_BLOCKED)
+            __asm__ volatile ("sti; hlt; cli" : : : "memory");
+        if (task_table[index].state != SCHEDULER_TASK_RUNNING) return false;
+    }
+}
+
+bool scheduler_mutex_unlock(scheduler_mutex_t *mutex) {
+    if (mutex == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t index = current_task_index;
+    if (!preemptive_active || index >= SCHEDULER_MAX_TASKS ||
+        task_table[index].state != SCHEDULER_TASK_RUNNING ||
+        mutex->locked == 0U || mutex->owner != task_table[index].id) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    mutex->locked = 0U;
+    mutex->owner = 0U;
+    (void)wait_queue_wake_one_locked(&mutex->waiters);
     scheduler_irq_restore(flags);
     return true;
 }
@@ -322,6 +472,77 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     task_table[next].state = SCHEDULER_TASK_RUNNING;
     current_task_index = next;
     return (void *)task_table[next].saved_frame;
+}
+
+static scheduler_wait_queue_t blocking_test_queue;
+static scheduler_mutex_t blocking_test_mutex;
+static volatile uint32_t blocking_test_waiting;
+static volatile uint32_t blocking_test_resumed;
+static volatile uint32_t blocking_test_wake_ok;
+static volatile uint32_t blocking_test_protected_count;
+static volatile uint32_t blocking_test_mutex_errors;
+
+static void blocking_test_waiter(void) {
+    blocking_test_waiting = 1U;
+    if (scheduler_wait_queue_wait(&blocking_test_queue)) ++blocking_test_resumed;
+}
+static void blocking_test_signaler(void) {
+    uint64_t guard = 0U;
+    while (blocking_test_waiting == 0U && guard++ < UINT64_C(1000000))
+        __asm__ volatile ("pause");
+    if (blocking_test_waiting != 0U &&
+        scheduler_wait_queue_wake_one(&blocking_test_queue)) ++blocking_test_wake_ok;
+}
+static void blocking_test_mutex_worker(void) {
+    if (!scheduler_mutex_lock(&blocking_test_mutex)) {
+        ++blocking_test_mutex_errors;
+        return;
+    }
+    for (uint32_t i = 0U; i < 10000U; ++i) {
+        ++blocking_test_protected_count;
+        __asm__ volatile ("pause");
+    }
+    if (!scheduler_mutex_unlock(&blocking_test_mutex)) ++blocking_test_mutex_errors;
+}
+
+bool scheduler_blocking_sync_self_test(void) {
+    scheduler_init();
+    scheduler_wait_queue_init(&blocking_test_queue);
+    scheduler_mutex_init(&blocking_test_mutex);
+    blocking_test_waiting = 0U;
+    blocking_test_resumed = 0U;
+    blocking_test_wake_ok = 0U;
+    blocking_test_protected_count = 0U;
+    blocking_test_mutex_errors = 0U;
+    scheduler_task_id_t waiter = 0U, signaler = 0U, worker_a = 0U, worker_b = 0U;
+    if (!scheduler_task_create(blocking_test_waiter, &waiter) ||
+        !scheduler_task_create(blocking_test_signaler, &signaler) ||
+        !scheduler_task_create(blocking_test_mutex_worker, &worker_a) ||
+        !scheduler_task_create(blocking_test_mutex_worker, &worker_b)) return false;
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+    const bool passed = waited && !preemptive_active && bootstrap_frame == NULL &&
+        scheduler_task_state(waiter) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(signaler) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(worker_a) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(worker_b) == SCHEDULER_TASK_EXITED &&
+        blocking_test_waiting == 1U && blocking_test_resumed == 1U &&
+        blocking_test_wake_ok == 1U &&
+        blocking_test_protected_count == 20000U &&
+        blocking_test_mutex_errors == 0U &&
+        blocking_test_queue.waiters == 0U &&
+        blocking_test_mutex.waiters.waiters == 0U &&
+        blocking_test_mutex.locked == 0U && blocking_test_mutex.owner == 0U;
+    const bool reaped = scheduler_task_reap(waiter) && scheduler_task_reap(signaler) &&
+        scheduler_task_reap(worker_a) && scheduler_task_reap(worker_b);
+    return passed && reaped;
 }
 
 static scheduler_step_result_t scheduler_lifecycle_probe_step(void *context) {
