@@ -1120,8 +1120,9 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
                                  scheduler_ipc_status_t status) {
     if (request == NULL || !scheduler_ipc_message_valid(response) ||
         request->protocol_version != SCHEDULER_IPC_PROTOCOL_VERSION ||
-        request->kind != SCHEDULER_IPC_KIND_REQUEST || request->request_id == 0U ||
-        request->source_service_id == 0U ||
+        request->kind != SCHEDULER_IPC_KIND_REQUEST ||
+        request->status != SCHEDULER_IPC_STATUS_OK ||
+        request->request_id == 0U || request->source_service_id == 0U ||
         (uint32_t)status > (uint32_t)SCHEDULER_IPC_STATUS_INTERNAL)
         return false;
 
@@ -1149,11 +1150,16 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
 
 bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *message,
                                            uint32_t request_id) {
-    return message != NULL && request_id != 0U &&
-        message->protocol_version == SCHEDULER_IPC_PROTOCOL_VERSION &&
-        message->request_id == request_id &&
-        (message->kind == SCHEDULER_IPC_KIND_RESPONSE ||
-         message->kind == SCHEDULER_IPC_KIND_ERROR);
+    if (message == NULL || request_id == 0U ||
+        message->protocol_version != SCHEDULER_IPC_PROTOCOL_VERSION ||
+        message->request_id != request_id ||
+        (uint32_t)message->status > (uint32_t)SCHEDULER_IPC_STATUS_INTERNAL)
+        return false;
+    if (message->kind == SCHEDULER_IPC_KIND_RESPONSE)
+        return message->status == SCHEDULER_IPC_STATUS_OK;
+    if (message->kind == SCHEDULER_IPC_KIND_ERROR)
+        return message->status != SCHEDULER_IPC_STATUS_OK;
+    return false;
 }
 
 uint32_t scheduler_ipc_service_count(void) {
@@ -1388,6 +1394,14 @@ bool scheduler_ipc_request_response_discovery_self_test(void) {
         scheduler_ipc_message_is_response_for(&probe, 0U))
         return false;
 
+    probe.kind = SCHEDULER_IPC_KIND_RESPONSE;
+    probe.status = SCHEDULER_IPC_STATUS_UNSUPPORTED;
+    if (scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
+        return false;
+    probe.kind = SCHEDULER_IPC_KIND_ERROR;
+    probe.status = SCHEDULER_IPC_STATUS_OK;
+    if (scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
+        return false;
     probe.kind = SCHEDULER_IPC_KIND_ERROR;
     probe.status = SCHEDULER_IPC_STATUS_UNSUPPORTED;
     if (!scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
@@ -1395,6 +1409,11 @@ bool scheduler_ipc_request_response_discovery_self_test(void) {
     probe.kind = SCHEDULER_IPC_KIND_REQUEST;
     if (scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
         return false;
+    probe.kind = SCHEDULER_IPC_KIND_RESPONSE;
+    probe.status = (scheduler_ipc_status_t)(SCHEDULER_IPC_STATUS_INTERNAL + 1U);
+    if (scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
+        return false;
+    probe.status = SCHEDULER_IPC_STATUS_OK;
     probe.kind = SCHEDULER_IPC_KIND_RESPONSE;
     probe.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION + 1U;
     if (scheduler_ipc_message_is_response_for(&probe, UINT32_C(0x778899AA)))
