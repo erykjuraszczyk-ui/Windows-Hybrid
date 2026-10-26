@@ -68,3 +68,14 @@ Architektura jest uznawana za wdrożoną dopiero po dostarczeniu kodu, wyników 
 The current single-core scheduler distinguishes READY, RUNNING, BLOCKED, EXITED and FAILED. Wait queues track blocked preemptive task slots and provide wake-one/wake-all operations. A non-recursive mutex tracks its owner and blocks contending tasks instead of busy-spinning. IRQ state is preserved around scheduler metadata updates.
 
 These are kernel-internal primitives, not a complete synchronization ABI. They are not SMP-safe, do not implement priority inheritance or timeouts, and do not replace memory isolation. Treat the implementation as experimental until the QEMU regression test passes on the feature branch.
+
+
+## 10. IPC protocol and service discovery (v0.8.0–v0.10.0)
+
+The kernel currently provides a bounded FIFO channel (four entries, payload up to 24 bytes), counting semaphores, and a named-service registry. The registry is limited to eight active services. Service names are case-sensitive and up to 15 bytes plus NUL; IDs are monotonic and are not reused.
+
+IPC protocol v1 extends a message with protocol version, kind (DATA, REQUEST, RESPONSE, ERROR, EVENT), status, source service ID and request/correlation ID. The request helper requires a non-zero ID; the reply helper copies that ID to the response and uses RESPONSE for status OK or ERROR for non-zero status. Clients validate replies with the response matcher.
+
+Service discovery exposes name lookup, enumeration of active services, and an information snapshot containing service ID, capabilities, queue depth and capacity. Registration capabilities describe one-way, request/response and event support.
+
+These APIs remain an experimental kernel-internal interface. They do not provide a kernel-managed pending-call table, concurrent-response demultiplexing, protocol negotiation, IPC deadlines/retry policy, endpoint access-control enforcement, Ring 3 isolation or SMP safety. A client must coordinate concurrent reads on one service endpoint. Cancellation of a task blocked inside an IPC operation can leave that call's active-reference bookkeeping unreleased; until that lifecycle interaction is implemented and tested, callers should not cancel tasks while they are inside a blocking IPC send or receive. QEMU tests validate only the configured emulator profile.

@@ -326,6 +326,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: IPC_SERVICES_SELFTEST_OK\n");
+    if (!scheduler_ipc_request_response_discovery_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_REQUEST_RESPONSE\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
 }

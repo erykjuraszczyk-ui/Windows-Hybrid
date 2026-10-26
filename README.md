@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.8.0 — Semaphores & IPC Foundations; **CI validation pending**.
+**Aktualny etap:** v0.10.0 — IPC Request/Response Protocol & Service Discovery; **CI validation pending**.
 
 ## Historia statusu
 
@@ -12,6 +12,8 @@
 - **v0.5.0 — CI PASS w QEMU:** GDT/TSS/IST i cykl życia zadań.
 - **v0.6.0 — CI PASS w QEMU:** blokowanie, wybudzanie, kolejki oczekujących i mutex.
 - **v0.7.0 — CI PASS w QEMU:** sleep, timeouty i anulowanie zadań oczekujących ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40338105255)).
+- **v0.8.0 — CI PASS po scaleniu:** semafory i ograniczone kanały IPC ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40348058541)).
+- **v0.9.0 — CI PASS po scaleniu:** rejestr usług IPC i routing wiadomości ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40350916069)).
 
 ## Potwierdzenie v0.5.0
 
@@ -85,11 +87,23 @@ See [HYBRID OS v0.8.0 guide](docs/BOOTSTRAP_v0.8.0.md). Confirmed markers: `HYBR
 
 ## HYBRID OS v0.9.0 — IPC Services & Kernel Communication Layer
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS po scaleniu** ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40350916069)).
 
 - Fixed-capacity registry of up to 8 named kernel IPC services (names up to 15 characters, case-sensitive) with monotonic 32-bit service IDs.
 - Service lookup and routed FIFO messaging. Messages carry source service ID and request/correlation ID in addition to type, length and payload.
 - Unregistration is refused while messages, waiters or in-flight API calls remain; service IDs are not recycled.
 - QEMU regression test checks registration/lookup, duplicate/invalid names, receiver wakeup, source/request metadata, queued-message protection and clean unregister.
 
-See [HYBRID OS v0.9.0 guide](docs/BOOTSTRAP_v0.9.0.md). Required marker before PASS: `HYBRID: IPC_SERVICES_SELFTEST_OK` followed by `HYBRID: BOOT_OK`.
+See [HYBRID OS v0.9.0 guide](docs/BOOTSTRAP_v0.9.0.md). Confirmed markers: `HYBRID: IPC_SERVICES_SELFTEST_OK` and `HYBRID: BOOT_OK`.
+
+
+## HYBRID OS v0.10.0 — IPC Request/Response Protocol & Service Discovery
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Versioned IPC message metadata: protocol version, kind (`DATA`, `REQUEST`, `RESPONSE`, `ERROR`, `EVENT`) and typed status code.
+- Request sends require a non-zero correlation ID. Replies reuse that ID and identify the responder; responses and typed errors are matched by `scheduler_ipc_message_is_response_for()`.
+- Service discovery adds capability-aware registration, enumeration of active services and per-service info (ID, name, capabilities, queue depth and capacity).
+- QEMU test exercises OK and UNSUPPORTED replies, request correlation, bad IDs/versions/kinds, duplicate/case-sensitive names and service discovery/cleanup.
+
+See [HYBRID OS v0.10.0 guide](docs/BOOTSTRAP_v0.10.0.md). Required markers before PASS: `HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK` and `HYBRID: BOOT_OK`.

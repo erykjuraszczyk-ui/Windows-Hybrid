@@ -21,10 +21,40 @@ typedef enum {
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
+#define SCHEDULER_IPC_PROTOCOL_VERSION 1U
+#define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
+#define SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE (UINT32_C(1) << 1U)
+#define SCHEDULER_IPC_SERVICE_CAP_EVENTS (UINT32_C(1) << 2U)
+#define SCHEDULER_IPC_SERVICE_CAP_ALL (SCHEDULER_IPC_SERVICE_CAP_ONE_WAY | SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE | SCHEDULER_IPC_SERVICE_CAP_EVENTS)
 typedef uint32_t scheduler_ipc_service_id_t;
+typedef enum {
+    SCHEDULER_IPC_KIND_DATA = 0U,
+    SCHEDULER_IPC_KIND_REQUEST = 1U,
+    SCHEDULER_IPC_KIND_RESPONSE = 2U,
+    SCHEDULER_IPC_KIND_ERROR = 3U,
+    SCHEDULER_IPC_KIND_EVENT = 4U
+} scheduler_ipc_message_kind_t;
+typedef enum {
+    SCHEDULER_IPC_STATUS_OK = 0U,
+    SCHEDULER_IPC_STATUS_INVALID_ARGUMENT = 1U,
+    SCHEDULER_IPC_STATUS_NOT_FOUND = 2U,
+    SCHEDULER_IPC_STATUS_UNSUPPORTED = 3U,
+    SCHEDULER_IPC_STATUS_BUSY = 4U,
+    SCHEDULER_IPC_STATUS_INTERNAL = 5U
+} scheduler_ipc_status_t;
+typedef struct {
+    scheduler_ipc_service_id_t id;
+    uint32_t capabilities;
+    uint32_t queued_messages;
+    uint32_t queue_capacity;
+    char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
+} scheduler_ipc_service_info_t;
 typedef struct {
     uint32_t type;
     uint32_t length;
+    uint32_t protocol_version;
+    scheduler_ipc_message_kind_t kind;
+    scheduler_ipc_status_t status;
     scheduler_ipc_service_id_t source_service_id;
     uint32_t request_id;
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
@@ -83,7 +113,12 @@ bool scheduler_ipc_send(scheduler_ipc_channel_t *channel, const scheduler_ipc_me
 bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel, scheduler_ipc_message_t *message);
 bool scheduler_semaphore_ipc_self_test(void);
 bool scheduler_ipc_service_register(const char *name, scheduler_ipc_service_id_t *service_id);
+bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
+                                       scheduler_ipc_service_id_t *service_id);
 bool scheduler_ipc_service_lookup(const char *name, scheduler_ipc_service_id_t *service_id);
+bool scheduler_ipc_service_enumerate(uint32_t active_index, scheduler_ipc_service_info_t *info);
+bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
+                                    scheduler_ipc_service_info_t *info);
 bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id);
 bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
                                 scheduler_ipc_service_id_t destination_service_id,
@@ -91,8 +126,19 @@ bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
                                 const scheduler_ipc_message_t *message);
 bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
                                    scheduler_ipc_message_t *message);
+bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_service_id,
+                                        scheduler_ipc_service_id_t destination_service_id,
+                                        uint32_t request_id,
+                                        const scheduler_ipc_message_t *request);
+bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
+                                 const scheduler_ipc_message_t *request,
+                                 const scheduler_ipc_message_t *response,
+                                 scheduler_ipc_status_t status);
+bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *message,
+                                           uint32_t request_id);
 uint32_t scheduler_ipc_service_count(void);
 bool scheduler_ipc_service_self_test(void);
+bool scheduler_ipc_request_response_discovery_self_test(void);
 bool scheduler_blocking_sync_self_test(void);
 void *scheduler_on_timer_interrupt(void *interrupt_frame);
 bool scheduler_preemptive_self_test(void);
