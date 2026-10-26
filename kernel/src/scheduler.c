@@ -528,8 +528,8 @@ bool scheduler_blocking_sync_self_test(void) {
     current_task_index = SCHEDULER_NO_TASK;
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
-    preemptive_tick_limit = SCHEDULER_PREEMPTIVE_TEST_TICKS;
-    const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    preemptive_tick_limit = SCHEDULER_BLOCKING_TEST_TICKS;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_BLOCKING_TEST_TICKS;
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target);
     interrupts_disable();
@@ -609,8 +609,8 @@ bool scheduler_preemptive_self_test(void) {
     current_task_index = SCHEDULER_NO_TASK;
     preemptive_ticks = 0U;
     preemptive_switches = 0U;
-    preemptive_tick_limit = SCHEDULER_BLOCKING_TEST_TICKS;
-    const uint64_t target = interrupts_ticks() + SCHEDULER_BLOCKING_TEST_TICKS;
+    preemptive_tick_limit = SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target);
     interrupts_disable();
