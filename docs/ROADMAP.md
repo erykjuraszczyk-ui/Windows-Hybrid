@@ -20,8 +20,9 @@
 | v0.4.0 | Eksperymentalna preempcja zadań Ring 0 przez IRQ0 i osobne stosy; CI QEMU |
 | v0.5.0 | Task Lifecycle, bezpieczny reaping, GDT/TSS i stosy IST; walidacja w QEMU |
 | v0.6.0 | Task Blocking, Wakeup & Synchronization Core; wait queues i mutex w jednordzeniowym Ring 0; CI PASS |
-| v0.7.0 | Sleep/Timer Core, timed wait queues, bezpieczne anulowanie READY/BLOCKED; walidacja CI wymagana |
-| v0.8.0–v0.9.0 | Semafory, IPC i dalsze usługi kernela |
+| v0.7.0 | Sleep/Timer Core, timed wait queues, bezpieczne anulowanie READY/BLOCKED; CI PASS w QEMU |
+| v0.8.0 | Semafory zliczające i ograniczony kanał IPC; walidacja CI wymagana |
+| v0.9.0 | Rozszerzenie usług IPC i przygotowanie do dalszej integracji kernela |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
