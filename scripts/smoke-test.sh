@@ -30,10 +30,13 @@ required_markers=(
   "HYBRID: MEMORY_MAP_OK"
   "HYBRID: MEMORY_SELFTEST_OK"
   "HYBRID: FRAMEBUFFER_OK"
+  "HYBRID: TSS_OK"
   "HYBRID: IDT_OK"
+  "HYBRID: IST_OK"
   "HYBRID: EXCEPTION_SELFTEST_OK"
   "HYBRID: TIMER_OK"
   "HYBRID: SCHEDULER_SELFTEST_OK"
+  "HYBRID: TASK_LIFECYCLE_SELFTEST_OK"
   "HYBRID: PREEMPTIVE_SELFTEST_OK"
   "HYBRID: BOOT_OK"
 )
@@ -45,4 +48,4 @@ for marker in "${required_markers[@]}"; do
     exit 1
   fi
 done
-echo "PASS: Memory Core, IDT, PIT, cooperative scheduler, and timer-driven context switching passed in QEMU."
+echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, PIT and preemptive scheduler passed in QEMU."

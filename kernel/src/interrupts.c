@@ -47,9 +47,9 @@ static uint16_t current_code_selector(void) {
     __asm__ volatile ("mov %%cs, %0" : "=r"(selector));
     return selector;
 }
-static void idt_set_gate(uint8_t vector, uintptr_t handler, uint16_t selector) {
+static void idt_set_gate(uint8_t vector, uintptr_t handler, uint16_t selector, uint8_t ist) {
     idt[vector].offset_low = (uint16_t)(handler & 0xFFFFU);
-    idt[vector].selector = selector; idt[vector].ist = 0U;
+    idt[vector].selector = selector; idt[vector].ist = (uint8_t)(ist & 0x07U);
     idt[vector].attributes = 0x8EU;
     idt[vector].offset_middle = (uint16_t)((handler >> 16U) & 0xFFFFU);
     idt[vector].offset_high = (uint32_t)((handler >> 32U) & 0xFFFFFFFFU);
@@ -76,11 +76,17 @@ bool interrupts_init(void) {
     __asm__ volatile ("cli");
     const uint16_t selector = current_code_selector();
     const uintptr_t default_handler = (uintptr_t)isr_default_stub;
-    for (uint32_t vector = 0; vector < IDT_ENTRIES; ++vector)
-        idt_set_gate((uint8_t)vector, default_handler, selector);
-    for (uint32_t vector = 0; vector < 32U; ++vector)
-        idt_set_gate((uint8_t)vector, (uintptr_t)isr_stub_table[vector], selector);
-    idt_set_gate((uint8_t)TIMER_VECTOR, (uintptr_t)isr_stub_table[TIMER_VECTOR], selector);
+    for (uint32_t vector = 0U; vector < IDT_ENTRIES; ++vector)
+        idt_set_gate((uint8_t)vector, default_handler, selector, 0U);
+    for (uint32_t vector = 0U; vector < 32U; ++vector) {
+        uint8_t ist = 0U;
+        if (vector == 2U) ist = 4U;       /* NMI */
+        else if (vector == 8U) ist = 1U;  /* double fault */
+        else if (vector == 13U) ist = 2U; /* general protection */
+        else if (vector == 14U) ist = 3U; /* page fault */
+        idt_set_gate((uint8_t)vector, (uintptr_t)isr_stub_table[vector], selector, ist);
+    }
+    idt_set_gate((uint8_t)TIMER_VECTOR, (uintptr_t)isr_stub_table[TIMER_VECTOR], selector, 0U);
     const struct idt_register idtr = {
         .limit = (uint16_t)(sizeof(idt) - 1U),
         .base = (uint64_t)(uintptr_t)&idt[0]
@@ -93,6 +99,17 @@ bool interrupts_init(void) {
     breakpoint_test_armed = false; breakpoint_test_passed = false;
     pic_remap_and_mask(); pit_init();
     return true;
+}
+bool interrupts_ist_self_test(void) {
+    struct idt_register loaded;
+    __asm__ volatile ("sidt %0" : "=m"(loaded));
+    return loaded.base == (uint64_t)(uintptr_t)&idt[0]
+        && loaded.limit == (uint16_t)(sizeof(idt) - 1U)
+        && idt[2].ist == 4U
+        && idt[8].ist == 1U
+        && idt[13].ist == 2U
+        && idt[14].ist == 3U
+        && idt[32].ist == 0U;
 }
 bool interrupts_self_test(void) {
     breakpoint_test_passed = false; breakpoint_test_armed = true;
