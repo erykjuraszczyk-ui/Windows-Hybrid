@@ -143,7 +143,7 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
                                 const scheduler_ipc_message_t *request,
                                 uint64_t timeout_ticks,
                                 scheduler_ipc_message_t *response,
-                                uint32_t *request_id_out);
+                                volatile uint32_t *request_id_out);
 bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
                                uint32_t request_id);
 uint32_t scheduler_ipc_pending_call_count(void);
