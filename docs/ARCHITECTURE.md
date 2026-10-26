@@ -61,3 +61,10 @@ Autoryzacja jest egzekwowana przy każdej chronionej operacji. Manifest deklaruj
 ## 8. Weryfikacja
 
 Architektura jest uznawana za wdrożoną dopiero po dostarczeniu kodu, wyników builda i testów. Testy QEMU nie są dowodem obsługi wszystkich komputerów fizycznych; dla sprzętu docelowego wymagana jest osobna walidacja.
+
+
+## 9. Blocking and synchronization (v0.6.0)
+
+The current single-core scheduler distinguishes READY, RUNNING, BLOCKED, EXITED and FAILED. Wait queues track blocked preemptive task slots and provide wake-one/wake-all operations. A non-recursive mutex tracks its owner and blocks contending tasks instead of busy-spinning. IRQ state is preserved around scheduler metadata updates.
+
+These are kernel-internal primitives, not a complete synchronization ABI. They are not SMP-safe, do not implement priority inheritance or timeouts, and do not replace memory isolation. Treat the implementation as experimental until the QEMU regression test passes on the feature branch.
