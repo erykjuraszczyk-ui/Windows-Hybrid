@@ -15,7 +15,9 @@
 | Wersja | Cel |
 |---|---|
 | v0.1.0 | x86-64, UEFI, C17, system natywny; grafika odłożona; nowe repozytorium |
-| v0.2.0–v0.9.0 | Iteracyjne rozwijanie specyfikacji wczesnego systemu |
+| v0.2.0 | Alokator stron, IDT, wyjątki i PIT; CI w QEMU |
+| v0.3.0 | Kooperatywny step-based Scheduler Core; tablica zadań i round-robin |
+| v0.4.0–v0.9.0 | Następne iteracje pamięci, przerwań, kontekstu i usług kernela |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |

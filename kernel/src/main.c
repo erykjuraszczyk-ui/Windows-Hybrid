@@ -5,6 +5,7 @@
 #include "console.h"
 #include "interrupts.h"
 #include "memory.h"
+#include "scheduler.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t base_revision[] = LIMINE_BASE_REVISION(6);
@@ -201,7 +202,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
               unit, icon_size - unit * 4U, white);
 
     draw_centered(fb, fb->height / 2U, "HYBRID OS", unit, white);
-    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.2.0", unit, cyan);
+    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.3.0", unit, cyan);
     draw_centered(fb, fb->height / 2U + unit * 22U, "BOOT OK", 2U, white);
     draw_centered(fb, fb->height - 24U, "X86-64 / UEFI", 1U, muted);
     rectangle(fb, 0U, 0U, fb->width, 4U, cyan);
@@ -210,7 +211,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
 
 void kmain(void) {
     console_init();
-    serial_write("\nHYBRID OS v0.2.0\n");
+    serial_write("\nHYBRID OS v0.3.0\n");
     serial_write("HYBRID: KERNEL_START\n");
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
@@ -263,6 +264,13 @@ void kmain(void) {
     }
     serial_write("HYBRID: TIMER_OK ticks=");
     serial_write_hex64(interrupts_ticks());
+    serial_write("\n");
+    if (!scheduler_self_test()) {
+        serial_write("HYBRID: FAIL_SCHEDULER_SELFTEST\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: SCHEDULER_SELFTEST_OK dispatches=");
+    serial_write_hex64(scheduler_dispatch_count());
     serial_write("\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
