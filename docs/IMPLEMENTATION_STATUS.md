@@ -41,3 +41,15 @@ Weryfikacja IST obejmuje konfigurację GDT/TSS/IDT oraz kontrolę indeksów IST.
 - Wyniki QEMU potwierdzają wyłącznie testowaną konfigurację emulatora, nie fizyczny sprzęt.
 
 Funkcje poza zakresem zaliczonych testów pozostają SPECIFIED / NOT VERIFIED.
+
+
+## HYBRID OS v0.6.0 — Task Blocking, Wakeup & Synchronization Core
+
+**Status: implementation committed on a feature branch; CI validation pending.**
+
+- Added the `BLOCKED` task state and guarded `scheduler_task_block()` / `scheduler_task_wake()` transitions for ready step-based tasks.
+- Added preemptive-task wait queues with wake-one and wake-all operations. A waiting task records its queue and is made READY by a wake operation; the timer scheduler does not silently turn BLOCKED tasks back into READY.
+- Added a non-recursive mutex with owner checking and a wait queue. These primitives are designed for the current single-core Ring 0 kernel only.
+- Added a QEMU self-test for wait/wakeup and mutex contention, with the marker `HYBRID: BLOCKING_SYNC_SELFTEST_OK`.
+
+The implementation is not considered validated until `make test` passes in CI and the marker is present in the serial log. This does not provide SMP-safe locking, priority inheritance, timeouts, cancellation, or process isolation.
