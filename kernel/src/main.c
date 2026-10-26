@@ -203,7 +203,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
               unit, icon_size - unit * 4U, white);
 
     draw_centered(fb, fb->height / 2U, "HYBRID OS", unit, white);
-    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.5.0", unit, cyan);
+    draw_centered(fb, fb->height / 2U + unit * 10U, "V0.6.0", unit, cyan);
     draw_centered(fb, fb->height / 2U + unit * 22U, "BOOT OK", 2U, white);
     draw_centered(fb, fb->height - 24U, "X86-64 / UEFI", 1U, muted);
     rectangle(fb, 0U, 0U, fb->width, 4U, cyan);
@@ -213,7 +213,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
 void kmain(void) {
     __asm__ volatile ("cli" : : : "memory");
     console_init();
-    serial_write("\nHYBRID OS v0.5.0\n");
+    serial_write("\nHYBRID OS v0.6.0\n");
     serial_write("HYBRID: KERNEL_START\n");
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
