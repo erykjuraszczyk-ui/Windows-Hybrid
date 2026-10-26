@@ -21,6 +21,12 @@ Dodać własne tablice deskryptorów x86-64 i bardziej bezpieczny cykl życia za
 - Po bezpiecznym reaping strona jest zwalniana, a slot może zostać użyty ponownie. Identyfikatory pozostają monotoniczne, więc nie są ponownie przypisywane staremu zadaniu.
 - Test preempcji wykorzystuje dwie skończone funkcje; sprawdza stany EXITED, liczniki obu zadań, przełączenie kontekstu i odzyskanie stron.
 
+## Walidacja CI
+
+Przebieg v0.5.0 w QEMU zakończył się sukcesem: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40307342604
+
+Log potwierdza `TSS_OK`, `IST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` (50 000 iteracji dla obu zadań) i `BOOT_OK`. Jest to walidacja testowanej konfiguracji emulatora, nie certyfikacja fizycznego sprzętu. Indeksy IST są testowane strukturalnie; wymuszone #DF/#PF w ramach fault-injection pozostaje poza zakresem.
+
 ## Test
 
     make clean
