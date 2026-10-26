@@ -582,14 +582,15 @@ static bool scheduler_wait_for_blocked_task(uint32_t index) {
            task_table[index].state == SCHEDULER_TASK_RUNNING;
 }
 
-void scheduler_semaphore_init(scheduler_semaphore_t *semaphore,
-                              uint32_t initial_count, uint32_t max_count) {
-    if (semaphore == NULL || max_count == 0U || initial_count > max_count) return;
+bool scheduler_semaphore_init(scheduler_semaphore_t *semaphore,
+                               uint32_t initial_count, uint32_t max_count) {
+    if (semaphore == NULL || max_count == 0U || initial_count > max_count) return false;
     const uint64_t flags = scheduler_irq_save_disable();
     semaphore->count = initial_count;
     semaphore->max_count = max_count;
     semaphore->waiters.waiters = 0U;
     scheduler_irq_restore(flags);
+    return true;
 }
 
 bool scheduler_semaphore_wait(scheduler_semaphore_t *semaphore) {
@@ -791,7 +792,7 @@ static void semaphore_ipc_test_receiver(void) {
 
 bool scheduler_semaphore_ipc_self_test(void) {
     scheduler_init();
-    scheduler_semaphore_init(&semaphore_ipc_test_sem, 0U, 1U);
+    if (!scheduler_semaphore_init(&semaphore_ipc_test_sem, 0U, 1U)) return false;
     scheduler_ipc_channel_init(&semaphore_ipc_test_channel);
     semaphore_ipc_test_sem_acquired = 0U;
     semaphore_ipc_test_sem_posted = 0U;
@@ -801,10 +802,15 @@ bool scheduler_semaphore_ipc_self_test(void) {
 
     if (semaphore_ipc_test_sem.count != 0U ||
         semaphore_ipc_test_sem.max_count != 1U ||
+        scheduler_semaphore_init(&semaphore_ipc_test_sem, 1U, 0U) ||
+        scheduler_semaphore_init(&semaphore_ipc_test_sem, 2U, 1U) ||
         scheduler_semaphore_wait(NULL) ||
         scheduler_semaphore_post(NULL) ||
         scheduler_ipc_send(NULL, NULL) ||
         scheduler_ipc_receive(NULL, NULL)) return false;
+    if (!scheduler_semaphore_post(&semaphore_ipc_test_sem) ||
+        scheduler_semaphore_post(&semaphore_ipc_test_sem) ||
+        !scheduler_semaphore_init(&semaphore_ipc_test_sem, 0U, 1U)) return false;
     scheduler_ipc_message_t invalid = {0};
     invalid.length = SCHEDULER_IPC_PAYLOAD_SIZE + 1U;
     if (scheduler_ipc_send(&semaphore_ipc_test_channel, &invalid)) return false;
@@ -812,8 +818,8 @@ bool scheduler_semaphore_ipc_self_test(void) {
     scheduler_task_id_t waiter = 0U, poster = 0U, sender = 0U, receiver = 0U;
     if (!scheduler_task_create(semaphore_ipc_test_waiter, &waiter) ||
         !scheduler_task_create(semaphore_ipc_test_poster, &poster) ||
-        !scheduler_task_create(semaphore_ipc_test_sender, &sender) ||
-        !scheduler_task_create(semaphore_ipc_test_receiver, &receiver)) return false;
+        !scheduler_task_create(semaphore_ipc_test_receiver, &receiver) ||
+        !scheduler_task_create(semaphore_ipc_test_sender, &sender)) return false;
 
     preemptive_active = true;
     bootstrap_frame = NULL;
