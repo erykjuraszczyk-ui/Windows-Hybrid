@@ -557,6 +557,11 @@ bool scheduler_task_lifecycle_self_test(void) {
     uint32_t runs = 0U;
     scheduler_task_id_t first = 0U, second = 0U;
     if (!scheduler_create_task(scheduler_lifecycle_probe_step, &runs, &first)) return false;
+    if (!scheduler_task_block(first) ||
+        scheduler_task_state(first) != SCHEDULER_TASK_BLOCKED ||
+        scheduler_run_once() ||
+        !scheduler_task_wake(first) ||
+        scheduler_task_state(first) != SCHEDULER_TASK_READY) return false;
     if (!scheduler_run_once() || runs != 1U ||
         scheduler_task_state(first) != SCHEDULER_TASK_EXITED) return false;
     if (!scheduler_task_reap(first) ||
