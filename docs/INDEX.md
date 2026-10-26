@@ -10,6 +10,7 @@
 - [HYBRID OS v0.6.0](BOOTSTRAP_v0.6.0.md) — blokowanie, wybudzanie i mutexy.
 - [HYBRID OS v0.7.0](BOOTSTRAP_v0.7.0.md) — sleep, timeouty i anulowanie zadań.
 - [HYBRID OS v0.8.0](BOOTSTRAP_v0.8.0.md) — semafory i podstawy IPC.
+- [HYBRID OS v0.9.0](BOOTSTRAP_v0.9.0.md) — rejestr usług IPC, routing i identyfikatory żądań.
 - [ROADMAP.md](ROADMAP.md) — wersje oraz zależności pomiędzy etapami.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — warstwy systemu i granice odpowiedzialności.
 - [SECURITY_MODEL.md](SECURITY_MODEL.md) — capabilities, sandbox, tożsamość, polityki i rozruch.
@@ -30,6 +31,7 @@
 | v0.6.0 | Blocking/wakeup, kolejki oczekujących i mutexy |
 | v0.7.0 | Timery, timeouty oczekiwania i anulowanie zadań |
 | v0.8.0 | Semafory zliczające i kanał IPC o stałym rozmiarze |
+| v0.9.0 | Nazwane usługi IPC, routing wiadomości i cykl życia endpointów |
 | v0.3.0+ | Rozszerzanie pamięci, przerwań i usług kernela |
 | v1.5.0 | Surface API i usługi pulpitu |
 | v1.6.0 | Shared memory i double buffering |

@@ -73,7 +73,9 @@ Potwierdzone markery QEMU: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` i `HYBRID:
 
 ## HYBRID OS v0.8.0 — Semaphores & IPC Foundations
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS w QEMU po scaleniu.**
+
+Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40345738501
 
 - `scheduler_semaphore_t` implements a bounded counting semaphore with block-on-zero wait and direct token handoff to a selected waiter. `scheduler_semaphore_init()` rejects zero maximums and initial counts greater than the maximum.
 - `scheduler_ipc_channel_t` implements a fixed ring buffer of four messages per channel. Each message has a 32-bit type, a 32-bit payload length, and up to 24 payload bytes.
@@ -82,3 +84,16 @@ Potwierdzone markery QEMU: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` i `HYBRID:
 - QEMU regression test validates null/invalid inputs, semaphore count bounds and handoff, receiver wakeup on an empty channel, sender blocking when the ring is full, message ordering/content, and empty wait queues after completion.
 
 Required QEMU markers: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` and `HYBRID: BOOT_OK`. Do not mark v0.8.0 PASS until the current code revision builds and the test marker is present in CI logs.
+
+
+## HYBRID OS v0.9.0 — IPC Services & Kernel Communication Layer
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- `scheduler_ipc_service_register/lookup/unregister` zapewniają rejestrację, wyszukiwanie i kontrolowane wyrejestrowanie do 8 usług; nazwy są case-sensitive, do 15 bajtów plus NUL.
+- IDs są niezerowe, monotoniczne i nie są ponownie używane; rejestracja zostaje zablokowana po wyczerpaniu przestrzeni ID.
+- `scheduler_ipc_service_send(source, destination, request_id, message)` kieruje wiadomości FIFO i dopisuje source service ID oraz request/correlation ID. `scheduler_ipc_service_receive(service_id, message)` odbiera z kolejki wskazanej usługi.
+- Wyrejestrowanie jest odrzucane, gdy istnieją wiadomości, waiterzy lub aktywne wywołania API. Aktywne referencje chronią endpoint podczas blokującego send/receive.
+- Test QEMU sprawdza niepoprawne nazwy, duplikaty, lookup, routing i metadane, odbiorcę blokującego się na pustym kanale, ochronę endpointu z wiadomością oraz czyste wyrejestrowanie.
+
+Oczekiwane markery: `HYBRID: IPC_SERVICES_SELFTEST_OK` i `HYBRID: BOOT_OK`. Funkcja pozostaje prototypem jednordzeniowego Ring 0; brak autoryzacji usług, izolacji procesów, SMP, limitów ruchu i dynamicznego zamykania kanałów z oczekującymi klientami.

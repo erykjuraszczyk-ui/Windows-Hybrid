@@ -666,6 +666,8 @@ static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
                                        const scheduler_ipc_message_t *source) {
     destination->type = source->type;
     destination->length = source->length;
+    destination->source_service_id = source->source_service_id;
+    destination->request_id = source->request_id;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
         destination->payload[i] = source->payload[i];
 }
@@ -866,6 +868,286 @@ bool scheduler_semaphore_ipc_self_test(void) {
         serial_write("\n");
     }
     return passed && reaped;
+}
+
+
+typedef struct {
+    bool active;
+    scheduler_ipc_service_id_t id;
+    uint32_t active_calls;
+    char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
+    scheduler_ipc_channel_t channel;
+} scheduler_ipc_service_t;
+
+static scheduler_ipc_service_t ipc_services[SCHEDULER_IPC_MAX_SERVICES];
+static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
+
+static uint32_t scheduler_ipc_name_length(const char *name) {
+    if (name == NULL) return 0U;
+    uint32_t length = 0U;
+    while (length < SCHEDULER_IPC_SERVICE_NAME_SIZE && name[length] != '\0')
+        ++length;
+    return length > 0U && length < SCHEDULER_IPC_SERVICE_NAME_SIZE ? length : 0U;
+}
+
+static bool scheduler_ipc_name_equal(const char *left, const char *right) {
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i) {
+        if (left[i] != right[i]) return false;
+        if (left[i] == '\0') return true;
+    }
+    return false;
+}
+
+static scheduler_ipc_service_t *scheduler_ipc_find_service_locked(
+    scheduler_ipc_service_id_t service_id) {
+    if (service_id == 0U) return NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i)
+        if (ipc_services[i].active && ipc_services[i].id == service_id)
+            return &ipc_services[i];
+    return NULL;
+}
+
+bool scheduler_ipc_service_register(const char *name,
+                                    scheduler_ipc_service_id_t *service_id) {
+    const uint32_t name_length = scheduler_ipc_name_length(name);
+    if (name_length == 0U || service_id == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *free_slot = NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
+        scheduler_ipc_service_t *service = &ipc_services[i];
+        if (service->active && scheduler_ipc_name_equal(service->name, name)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (!service->active && free_slot == NULL) free_slot = service;
+    }
+    if (free_slot == NULL || next_ipc_service_id == 0U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    free_slot->active = false;
+    free_slot->id = next_ipc_service_id++;
+    free_slot->active_calls = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
+        free_slot->name[i] = '\0';
+    for (uint32_t i = 0U; i < name_length; ++i)
+        free_slot->name[i] = name[i];
+    scheduler_ipc_channel_init(&free_slot->channel);
+    free_slot->active = true;
+    *service_id = free_slot->id;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_lookup(const char *name,
+                                  scheduler_ipc_service_id_t *service_id) {
+    if (scheduler_ipc_name_length(name) == 0U || service_id == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
+        scheduler_ipc_service_t *service = &ipc_services[i];
+        if (service->active && scheduler_ipc_name_equal(service->name, name)) {
+            *service_id = service->id;
+            scheduler_irq_restore(flags);
+            return true;
+        }
+    }
+    scheduler_irq_restore(flags);
+    return false;
+}
+
+bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->active_calls != 0U ||
+        service->channel.count != 0U ||
+        service->channel.readers.waiters != 0U ||
+        service->channel.writers.waiters != 0U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->active = false;
+    service->id = 0U;
+    service->active_calls = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
+        service->name[i] = '\0';
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
+                                scheduler_ipc_service_id_t destination_service_id,
+                                uint32_t request_id,
+                                const scheduler_ipc_message_t *message) {
+    if (!scheduler_ipc_message_valid(message)) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *source =
+        scheduler_ipc_find_service_locked(source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(destination_service_id);
+    if (source == NULL || destination == NULL ||
+        source->active_calls == UINT32_MAX ||
+        destination->active_calls == UINT32_MAX) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    ++source->active_calls;
+    ++destination->active_calls;
+    scheduler_ipc_channel_t *channel = &destination->channel;
+    scheduler_irq_restore(flags);
+
+    scheduler_ipc_message_t forwarded;
+    scheduler_ipc_message_copy(&forwarded, message);
+    forwarded.source_service_id = source_service_id;
+    forwarded.request_id = request_id;
+    const bool sent = scheduler_ipc_send(channel, &forwarded);
+
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    --source->active_calls;
+    --destination->active_calls;
+    scheduler_irq_restore(finish_flags);
+    return sent;
+}
+
+bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
+                                   scheduler_ipc_message_t *message) {
+    if (message == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->active_calls == UINT32_MAX) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    ++service->active_calls;
+    scheduler_ipc_channel_t *channel = &service->channel;
+    scheduler_irq_restore(flags);
+
+    const bool received = scheduler_ipc_receive(channel, message);
+
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    --service->active_calls;
+    scheduler_irq_restore(finish_flags);
+    return received;
+}
+
+uint32_t scheduler_ipc_service_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    uint32_t count = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i)
+        if (ipc_services[i].active) ++count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
+static scheduler_ipc_service_id_t ipc_service_test_server_id;
+static scheduler_ipc_service_id_t ipc_service_test_client_id;
+static scheduler_ipc_service_id_t ipc_service_test_sink_id;
+static volatile uint32_t ipc_service_test_receive_ok;
+static volatile uint32_t ipc_service_test_send_ok;
+static volatile uint32_t ipc_service_test_errors;
+
+static void ipc_service_test_server(void) {
+    scheduler_ipc_message_t message = {0};
+    if (!scheduler_ipc_service_receive(ipc_service_test_server_id, &message)) {
+        ++ipc_service_test_errors;
+        return;
+    }
+    if (message.source_service_id != ipc_service_test_client_id ||
+        message.request_id != UINT32_C(0x1234ABCD) ||
+        message.type != UINT32_C(0x48595356) || message.length != 3U ||
+        message.payload[0] != UINT8_C(0x11) ||
+        message.payload[1] != UINT8_C(0x22) ||
+        message.payload[2] != UINT8_C(0x33))
+        ++ipc_service_test_errors;
+    else
+        ++ipc_service_test_receive_ok;
+}
+
+static void ipc_service_test_client(void) {
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x48595356);
+    message.length = 3U;
+    message.payload[0] = UINT8_C(0x11);
+    message.payload[1] = UINT8_C(0x22);
+    message.payload[2] = UINT8_C(0x33);
+    if (scheduler_ipc_service_send(ipc_service_test_client_id,
+                                   ipc_service_test_server_id,
+                                   UINT32_C(0x1234ABCD), &message))
+        ++ipc_service_test_send_ok;
+    else
+        ++ipc_service_test_errors;
+}
+
+bool scheduler_ipc_service_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    ipc_service_test_server_id = 0U;
+    ipc_service_test_client_id = 0U;
+    ipc_service_test_sink_id = 0U;
+    ipc_service_test_receive_ok = 0U;
+    ipc_service_test_send_ok = 0U;
+    ipc_service_test_errors = 0U;
+    if (scheduler_ipc_service_register(NULL, &ipc_service_test_server_id) ||
+        scheduler_ipc_service_register("", &ipc_service_test_server_id) ||
+        scheduler_ipc_service_register("name-that-is-too-long", &ipc_service_test_server_id) ||
+        scheduler_ipc_service_register("hyb.server", NULL) ||
+        scheduler_ipc_service_lookup(NULL, &ipc_service_test_server_id) ||
+        scheduler_ipc_service_unregister(0U)) return false;
+    if (!scheduler_ipc_service_register("hyb.server", &ipc_service_test_server_id) ||
+        !scheduler_ipc_service_register("hyb.client", &ipc_service_test_client_id) ||
+        !scheduler_ipc_service_register("hyb.sink", &ipc_service_test_sink_id))
+        return false;
+    scheduler_ipc_service_id_t looked_up = 0U;
+    if (!scheduler_ipc_service_lookup("hyb.server", &looked_up) ||
+        looked_up != ipc_service_test_server_id ||
+        scheduler_ipc_service_lookup("hyb.unknown", &looked_up) ||
+        scheduler_ipc_service_register("hyb.server", &looked_up) ||
+        scheduler_ipc_service_count() != 3U ||
+        scheduler_ipc_service_send(0U, ipc_service_test_server_id, 1U, NULL))
+        return false;
+
+    scheduler_init();
+    scheduler_task_id_t server = 0U, client = 0U;
+    if (!scheduler_task_create(ipc_service_test_server, &server) ||
+        !scheduler_task_create(ipc_service_test_client, &client)) return false;
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    preemptive_tick_limit = 32U;
+    const uint64_t target = interrupts_ticks() + 32U;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+
+    const bool task_ok = waited && !preemptive_active && bootstrap_frame == NULL &&
+        scheduler_task_state(server) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(client) == SCHEDULER_TASK_EXITED &&
+        ipc_service_test_receive_ok == 1U && ipc_service_test_send_ok == 1U &&
+        ipc_service_test_errors == 0U && scheduler_failed_count() == 0U &&
+        scheduler_task_reap(server) && scheduler_task_reap(client);
+    if (!task_ok) {
+        serial_write("HYBRID: IPC_SERVICE_DIAG server_state=");
+        serial_write_hex64(scheduler_task_state(server));
+        serial_write(" client_state="); serial_write_hex64(scheduler_task_state(client));
+        serial_write(" send="); serial_write_hex64(ipc_service_test_send_ok);
+        serial_write(" recv="); serial_write_hex64(ipc_service_test_receive_ok);
+        serial_write(" errors="); serial_write_hex64(ipc_service_test_errors);
+        serial_write("\n");
+    }
+    if (!task_ok || !scheduler_ipc_service_send(ipc_service_test_client_id,
+          ipc_service_test_sink_id, 7U, &(scheduler_ipc_message_t){.type = 9U, .length = 0U}))
+        return false;
+    if (scheduler_ipc_service_unregister(ipc_service_test_sink_id)) return false;
+    scheduler_ipc_message_t sink_message = {0};
+    if (!scheduler_ipc_service_receive(ipc_service_test_sink_id, &sink_message) ||
+        sink_message.source_service_id != ipc_service_test_client_id ||
+        sink_message.request_id != 7U ||
+        !scheduler_ipc_service_unregister(ipc_service_test_sink_id) ||
+        !scheduler_ipc_service_unregister(ipc_service_test_server_id) ||
+        !scheduler_ipc_service_unregister(ipc_service_test_client_id) ||
+        scheduler_ipc_service_count() != 0U)
+        return false;
+    return true;
 }
 
 void *scheduler_on_timer_interrupt(void *interrupt_frame) {

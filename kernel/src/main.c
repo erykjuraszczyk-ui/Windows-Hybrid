@@ -321,6 +321,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: SEMAPHORE_IPC_SELFTEST_OK\n");
+    if (!scheduler_ipc_service_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_SERVICES\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_SERVICES_SELFTEST_OK\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
 }
