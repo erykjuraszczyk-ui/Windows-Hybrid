@@ -196,6 +196,15 @@ bool scheduler_create_preemptive_task(scheduler_task_entry_fn entry, scheduler_t
     frame->rip = (uint64_t)(uintptr_t)scheduler_task_trampoline;
     frame->cs = (uint64_t)scheduler_current_cs();
     frame->rflags = UINT64_C(0x202);
+    serial_write("HYBRID: TASK_FRAME rip=");
+    serial_write_hex64(frame->rip);
+    serial_write(" cs=");
+    serial_write_hex64(frame->cs);
+    serial_write(" flags=");
+    serial_write_hex64(frame->rflags);
+    serial_write(" stack=");
+    serial_write_hex64(stack_top);
+    serial_write("\n");
 
     scheduler_task_t *task = &task_table[index];
     task->id = next_task_id++;
@@ -244,6 +253,9 @@ void *scheduler_on_timer_interrupt(void *interrupt_frame) {
     if (previous < SCHEDULER_MAX_TASKS && previous != next) ++preemptive_switches;
     task_table[next].state = SCHEDULER_TASK_RUNNING;
     current_task_index = next;
+    serial_write("HYBRID: PREEMPTIVE_DISPATCH frame=");
+    serial_write_hex64((uint64_t)(uintptr_t)task_table[next].saved_frame);
+    serial_write("\n");
     return (void *)task_table[next].saved_frame;
 }
 
