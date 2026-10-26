@@ -6,11 +6,17 @@
 typedef uint32_t scheduler_task_id_t;
 typedef enum {
     SCHEDULER_TASK_UNUSED = 0, SCHEDULER_TASK_READY, SCHEDULER_TASK_RUNNING,
-    SCHEDULER_TASK_EXITED, SCHEDULER_TASK_FAILED
+    SCHEDULER_TASK_BLOCKED, SCHEDULER_TASK_EXITED, SCHEDULER_TASK_FAILED
 } scheduler_task_state_t;
 typedef enum { SCHEDULER_STEP_YIELD = 0, SCHEDULER_STEP_COMPLETE = 1 } scheduler_step_result_t;
 typedef scheduler_step_result_t (*scheduler_step_fn)(void *context);
 typedef void (*scheduler_task_entry_fn)(void);
+typedef struct { volatile uint32_t waiters; } scheduler_wait_queue_t;
+typedef struct {
+    volatile uint32_t locked;
+    scheduler_task_id_t owner;
+    scheduler_wait_queue_t waiters;
+} scheduler_mutex_t;
 void scheduler_init(void);
 bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task_id_t *task_id);
 bool scheduler_run_once(void);
@@ -24,6 +30,16 @@ bool scheduler_task_lifecycle_self_test(void);
 bool scheduler_task_create(scheduler_task_entry_fn entry, scheduler_task_id_t *task_id);
 bool scheduler_create_preemptive_task(scheduler_task_entry_fn entry, scheduler_task_id_t *task_id);
 bool scheduler_task_reap(scheduler_task_id_t task_id);
+bool scheduler_task_block(scheduler_task_id_t task_id);
+bool scheduler_task_wake(scheduler_task_id_t task_id);
+void scheduler_wait_queue_init(scheduler_wait_queue_t *queue);
+bool scheduler_wait_queue_wait(scheduler_wait_queue_t *queue);
+bool scheduler_wait_queue_wake_one(scheduler_wait_queue_t *queue);
+uint32_t scheduler_wait_queue_wake_all(scheduler_wait_queue_t *queue);
+void scheduler_mutex_init(scheduler_mutex_t *mutex);
+bool scheduler_mutex_lock(scheduler_mutex_t *mutex);
+bool scheduler_mutex_unlock(scheduler_mutex_t *mutex);
+bool scheduler_blocking_sync_self_test(void);
 void *scheduler_on_timer_interrupt(void *interrupt_frame);
 bool scheduler_preemptive_self_test(void);
 uint64_t scheduler_preemptive_switch_count(void);
