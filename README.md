@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.5.0 — Task Lifecycle oraz GDT/TSS/IST; **CI PASS w skonfigurowanym QEMU**.
+**Aktualny etap:** v0.7.0 — Timers, Timed Waits & Task Cancellation; **CI validation pending**.
 
 ## Historia statusu
 
@@ -54,3 +54,16 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 - [Status implementacji](docs/IMPLEMENTATION_STATUS.md)
 - [HYBRID OS v0.4.0 — Preemptive Scheduler](docs/BOOTSTRAP_v0.4.0.md)
 - [HYBRID OS v0.5.0 — Task Lifecycle, TSS/IST](docs/BOOTSTRAP_v0.5.0.md)
+
+
+## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Tick-based `scheduler_sleep_ticks()` for preemptive Ring 0 tasks.
+- Timed wait queues via `scheduler_wait_queue_wait_timeout()` with explicit signaled vs timed-out results.
+- Cancellation for READY/BLOCKED tasks. Running tasks cannot be force-cancelled; they must cooperate.
+- Timer expiry removes wait-queue membership before returning a task to READY.
+- QEMU regression test covers deadline expiry, sleep completion and cancellation of a blocked waiter.
+
+See [HYBRID OS v0.7.0 guide](docs/BOOTSTRAP_v0.7.0.md). Do not mark this version PASS until CI includes `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` and `HYBRID: BOOT_OK`.
