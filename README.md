@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.7.0 — Timers, Timed Waits & Task Cancellation; **CI validation pending**.
+**Aktualny etap:** v0.8.0 — Semaphores & IPC Foundations; **CI validation pending**.
 
 ## Historia statusu
 
@@ -9,7 +9,9 @@
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, IDT, wyjątek i PIT.
 - **v0.3.0 — CI PASS w QEMU:** kooperatywny scheduler round-robin.
 - **v0.4.0 — CI PASS w QEMU:** test przełączania kontekstu dwóch zadań Ring 0 przez IRQ0.
-- **v0.5.0 — CI PASS w QEMU:** GDT/TSS/IST, cykl życia zadań, naturalne zakończenie i bezpieczne odzyskiwanie stron stosów.
+- **v0.5.0 — CI PASS w QEMU:** GDT/TSS/IST i cykl życia zadań.
+- **v0.6.0 — CI PASS w QEMU:** blokowanie, wybudzanie, kolejki oczekujących i mutex.
+- **v0.7.0 — CI PASS w QEMU:** sleep, timeouty i anulowanie zadań oczekujących ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40338105255)).
 
 ## Potwierdzenie v0.5.0
 
@@ -58,7 +60,7 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 
 ## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS w QEMU** ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40338105255)).
 
 - Tick-based `scheduler_sleep_ticks()` for preemptive Ring 0 tasks.
 - Timed wait queues via `scheduler_wait_queue_wait_timeout()` with explicit signaled vs timed-out results.
@@ -66,4 +68,16 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 - Timer expiry removes wait-queue membership before returning a task to READY.
 - QEMU regression test covers deadline expiry, sleep completion and cancellation of a blocked waiter.
 
-See [HYBRID OS v0.7.0 guide](docs/BOOTSTRAP_v0.7.0.md). Do not mark this version PASS until CI includes `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` and `HYBRID: BOOT_OK`.
+See [HYBRID OS v0.7.0 guide](docs/BOOTSTRAP_v0.7.0.md). Confirmed markers: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` and `HYBRID: BOOT_OK`.
+
+
+## HYBRID OS v0.8.0 — Semaphores & IPC Foundations
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Bounded counting semaphores with blocking wait and direct token handoff to one waiter.
+- Fixed-capacity IPC message ring: 4 messages per channel, each with a 24-byte payload and a 32-bit type/length header.
+- Blocking send on a full channel and blocking receive on an empty channel. Wait-queue transitions are made with interrupts disabled to avoid lost wakeups on the current single-core design.
+- Regression test exercises semaphore handoff/overflow and IPC reader wakeup, full-channel writer blocking, message order and payload validation.
+
+See [HYBRID OS v0.8.0 guide](docs/BOOTSTRAP_v0.8.0.md). Required marker before PASS: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` followed by `HYBRID: BOOT_OK`.
