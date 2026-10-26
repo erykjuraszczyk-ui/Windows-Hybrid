@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   boot-smoke-test:
-    name: Build and test Memory Core, IDT, PIT and Scheduler Core in QEMU
+    name: Build and test Memory Core, IDT, PIT, and preemptive Scheduler Core in QEMU
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -25,7 +25,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v5
         with:
-          name: hybrid-os-v0.3.0
+          name: hybrid-os-v0.4.0
           path: |
             build/kernel.elf
             build/hybrid.iso

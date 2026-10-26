@@ -61,7 +61,7 @@ $(BUILD_DIR)/scheduler.o: kernel/src/scheduler.c kernel/src/scheduler.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Ikernel/src -c $< -o $@
 
-$(BUILD_DIR)/interrupts.o: kernel/src/interrupts.c kernel/src/interrupts.h kernel/src/console.h
+$(BUILD_DIR)/interrupts.o: kernel/src/interrupts.c kernel/src/interrupts.h kernel/src/console.h kernel/src/scheduler.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Ikernel/src -c $< -o $@
 
@@ -93,7 +93,7 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(LIMINE_DIR)/limine limine.conf
 image: $(ISO_IMAGE)
 
 run: $(ISO_IMAGE)
-	qemu-system-x86_64 -machine q35 -m 512M -cdrom $(ISO_IMAGE) -serial stdio
+	qemu-system-x86_64 -machine q35 -cpu qemu64,-apic -m 512M -cdrom $(ISO_IMAGE) -serial stdio
 
 test: $(ISO_IMAGE)
 	bash scripts/smoke-test.sh

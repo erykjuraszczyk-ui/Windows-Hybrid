@@ -1,4 +1,5 @@
 #include "interrupts.h"
+#include "scheduler.h"
 #include "console.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -128,7 +129,7 @@ bool interrupts_wait_for_ticks(uint64_t target) {
     }
     return true;
 }
-void interrupt_dispatch(struct interrupt_frame *frame) {
+struct interrupt_frame *interrupt_dispatch(struct interrupt_frame *frame) {
     if (frame == NULL) {
         serial_write("HYBRID: FATAL_NULL_INTERRUPT_FRAME\n");
         interrupts_disable();
@@ -141,12 +142,12 @@ void interrupt_dispatch(struct interrupt_frame *frame) {
             serial_write("HYBRID: IRQ0_FIRST\n");
         }
         io_out8(0x20U, 0x20U);
-        return;
+        return (struct interrupt_frame *)scheduler_on_timer_interrupt(frame);
     }
     if (frame->vector == 3U && breakpoint_test_armed) {
         breakpoint_test_armed = false; breakpoint_test_passed = true;
         serial_write("HYBRID: EXCEPTION_SELFTEST_OK\n");
-        return;
+        return frame;
     }
     serial_write("HYBRID: FATAL_EXCEPTION vector=");
     serial_write_hex64(frame->vector);
