@@ -18,6 +18,7 @@ static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
 static uint32_t scheduler_cursor;
 static uint32_t next_task_id;
 static bool dispatch_in_progress;
+static bool scheduler_ever_initialized;
 static uint64_t dispatch_count;
 static uint64_t completed_count;
 static uint64_t failed_count;
@@ -113,7 +114,10 @@ void scheduler_init(void) {
         task_table[i].stack_physical = 0U;
     }
     scheduler_cursor = 0U;
-    next_task_id = 1U;
+    if (!scheduler_ever_initialized) {
+        next_task_id = 1U;
+        scheduler_ever_initialized = true;
+    }
     dispatch_in_progress = false;
     dispatch_count = 0U;
     completed_count = 0U;
