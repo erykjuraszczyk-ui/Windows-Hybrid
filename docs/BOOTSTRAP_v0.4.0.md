@@ -8,7 +8,7 @@ Dodać eksperymentalne przełączanie wykonania między zadaniami jądra x86-64 
 
 - `interrupt_dispatch` zwraca wskaźnik do ramki, z której assembly ma odtworzyć rejestry.
 - `interrupt_stubs.S` przełącza RSP na ramkę zwróconą przez dispatcher przed odtworzeniem rejestrów i `iretq`.
-- Scheduler tworzy początkowe ramki zgodne z układem 15 rejestrów ogólnych + vector/error code + RIP/CS/RFLAGS.
+- Scheduler tworzy początkowe ramki zgodne z układem 15 rejestrów ogólnych + vector/error code + RIP/CS/RFLAGS + RSP/SS.
 - Każde zadanie testowe otrzymuje osobną stronę 4 KiB ze stosu przez Memory Core.
 - IRQ0 zapisuje ramkę przerwanego zadania i wybiera kolejne READY zadanie w round-robin.
 - Ograniczony test przełącza przez 12 tyknięć PIT, wraca do stosu bootstrapu i weryfikuje progres obu zadań oraz liczbę przełączeń.
