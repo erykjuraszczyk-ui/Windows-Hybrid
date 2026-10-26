@@ -57,7 +57,9 @@ The implementation is not considered validated until `make test` passes in CI an
 
 ## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
 
-**Status: implementation committed on a feature branch; CI validation pending.**
+**Status: CI PASS w QEMU.**
+
+Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40338105255
 
 - `scheduler_sleep_ticks(ticks)`: block the current preemptive task until a relative PIT tick deadline expires.
 - `scheduler_wait_queue_wait_timeout(queue, timeout_ticks)`: wait for a queue wakeup or return false after its deadline.
@@ -66,4 +68,17 @@ The implementation is not considered validated until `make test` passes in CI an
 - Reaping accepts CANCELLED tasks only after the scheduler has stopped and the task is no longer linked to a wait queue.
 - Regression test covers timeout after 4 ticks, sleep completion after 6 ticks and cancellation of an indefinitely blocked task.
 
-Required QEMU markers: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` and `HYBRID: BOOT_OK`. The feature is not considered validated until the latest CI run passes. Current implementation remains single-core Ring 0 and is not SMP-safe.
+Potwierdzone markery QEMU: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` i `HYBRID: BOOT_OK`. Current implementation remains single-core Ring 0 and is not SMP-safe.
+
+
+## HYBRID OS v0.8.0 — Semaphores & IPC Foundations
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- `scheduler_semaphore_t` implements a bounded counting semaphore with block-on-zero wait and direct token handoff to a selected waiter. `scheduler_semaphore_init()` rejects zero maximums and initial counts greater than the maximum.
+- `scheduler_ipc_channel_t` implements a fixed ring buffer of four messages per channel. Each message has a 32-bit type, a 32-bit payload length, and up to 24 payload bytes.
+- `scheduler_ipc_send()` blocks the calling preemptive task when the channel is full and wakes one reader after enqueue. `scheduler_ipc_receive()` blocks when empty and wakes one writer after dequeue.
+- Wait registration and channel/semaphore state changes are protected by disabling interrupts. This is intended for the current single-core Ring 0 kernel only; it does not provide SMP synchronization, endpoint permissions, process isolation, channel destruction, or message timeouts.
+- QEMU regression test validates null/invalid inputs, semaphore count bounds and handoff, receiver wakeup on an empty channel, sender blocking when the ring is full, message ordering/content, and empty wait queues after completion.
+
+Required QEMU markers: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` and `HYBRID: BOOT_OK`. Do not mark v0.8.0 PASS until the current code revision builds and the test marker is present in CI logs.

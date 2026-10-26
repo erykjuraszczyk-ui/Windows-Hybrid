@@ -9,6 +9,7 @@
 - [HYBRID OS v0.5.0](BOOTSTRAP_v0.5.0.md) — Task Lifecycle, GDT/TSS i stosy IST.
 - [HYBRID OS v0.6.0](BOOTSTRAP_v0.6.0.md) — blokowanie, wybudzanie i mutexy.
 - [HYBRID OS v0.7.0](BOOTSTRAP_v0.7.0.md) — sleep, timeouty i anulowanie zadań.
+- [HYBRID OS v0.8.0](BOOTSTRAP_v0.8.0.md) — semafory i podstawy IPC.
 - [ROADMAP.md](ROADMAP.md) — wersje oraz zależności pomiędzy etapami.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — warstwy systemu i granice odpowiedzialności.
 - [SECURITY_MODEL.md](SECURITY_MODEL.md) — capabilities, sandbox, tożsamość, polityki i rozruch.
@@ -28,6 +29,7 @@
 | v0.5.0 | Cykl życia zadań, bezpieczne odzyskiwanie stosów, GDT/TSS/IST |
 | v0.6.0 | Blocking/wakeup, kolejki oczekujących i mutexy |
 | v0.7.0 | Timery, timeouty oczekiwania i anulowanie zadań |
+| v0.8.0 | Semafory zliczające i kanał IPC o stałym rozmiarze |
 | v0.3.0+ | Rozszerzanie pamięci, przerwań i usług kernela |
 | v1.5.0 | Surface API i usługi pulpitu |
 | v1.6.0 | Shared memory i double buffering |

@@ -316,6 +316,11 @@ void kmain(void) {
     serial_write("HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK expirations=");
     serial_write_hex64(scheduler_timer_expiration_count());
     serial_write("\n");
+    if (!scheduler_semaphore_ipc_self_test()) {
+        serial_write("HYBRID: FAIL_SEMAPHORE_IPC\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: SEMAPHORE_IPC_SELFTEST_OK\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
 }
