@@ -19,9 +19,14 @@ typedef enum {
 } scheduler_wait_result_t;
 #define SCHEDULER_IPC_CAPACITY 4U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
+#define SCHEDULER_IPC_MAX_SERVICES 8U
+#define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
+typedef uint32_t scheduler_ipc_service_id_t;
 typedef struct {
     uint32_t type;
     uint32_t length;
+    scheduler_ipc_service_id_t source_service_id;
+    uint32_t request_id;
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
 typedef struct {
@@ -77,6 +82,17 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel);
 bool scheduler_ipc_send(scheduler_ipc_channel_t *channel, const scheduler_ipc_message_t *message);
 bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel, scheduler_ipc_message_t *message);
 bool scheduler_semaphore_ipc_self_test(void);
+bool scheduler_ipc_service_register(const char *name, scheduler_ipc_service_id_t *service_id);
+bool scheduler_ipc_service_lookup(const char *name, scheduler_ipc_service_id_t *service_id);
+bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id);
+bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
+                                scheduler_ipc_service_id_t destination_service_id,
+                                uint32_t request_id,
+                                const scheduler_ipc_message_t *message);
+bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
+                                   scheduler_ipc_message_t *message);
+uint32_t scheduler_ipc_service_count(void);
+bool scheduler_ipc_service_self_test(void);
 bool scheduler_blocking_sync_self_test(void);
 void *scheduler_on_timer_interrupt(void *interrupt_frame);
 bool scheduler_preemptive_self_test(void);
