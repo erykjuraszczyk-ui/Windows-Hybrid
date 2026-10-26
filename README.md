@@ -73,11 +73,23 @@ See [HYBRID OS v0.7.0 guide](docs/BOOTSTRAP_v0.7.0.md). Confirmed markers: `HYBR
 
 ## HYBRID OS v0.8.0 — Semaphores & IPC Foundations
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS w QEMU** ([CI po scaleniu](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40345738501)).
 
 - Bounded counting semaphores with blocking wait and direct token handoff to one waiter.
 - Fixed-capacity IPC message ring: 4 messages per channel, each with a 24-byte payload and a 32-bit type/length header.
 - Blocking send on a full channel and blocking receive on an empty channel. Wait-queue transitions are made with interrupts disabled to avoid lost wakeups on the current single-core design.
 - Regression test exercises semaphore handoff/overflow and IPC reader wakeup, full-channel writer blocking, message order and payload validation.
 
-See [HYBRID OS v0.8.0 guide](docs/BOOTSTRAP_v0.8.0.md). Required marker before PASS: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` followed by `HYBRID: BOOT_OK`.
+See [HYBRID OS v0.8.0 guide](docs/BOOTSTRAP_v0.8.0.md). Confirmed markers: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` and `HYBRID: BOOT_OK`.
+
+
+## HYBRID OS v0.9.0 — IPC Services & Kernel Communication Layer
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Fixed-capacity registry of up to 8 named kernel IPC services (names up to 15 characters, case-sensitive) with monotonic 32-bit service IDs.
+- Service lookup and routed FIFO messaging. Messages carry source service ID and request/correlation ID in addition to type, length and payload.
+- Unregistration is refused while messages, waiters or in-flight API calls remain; service IDs are not recycled.
+- QEMU regression test checks registration/lookup, duplicate/invalid names, receiver wakeup, source/request metadata, queued-message protection and clean unregister.
+
+See [HYBRID OS v0.9.0 guide](docs/BOOTSTRAP_v0.9.0.md). Required marker before PASS: `HYBRID: IPC_SERVICES_SELFTEST_OK` followed by `HYBRID: BOOT_OK`.
