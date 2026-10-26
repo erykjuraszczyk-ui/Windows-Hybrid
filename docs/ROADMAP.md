@@ -19,7 +19,7 @@
 | v0.3.0 | Kooperatywny step-based Scheduler Core; tablica zadań i round-robin |
 | v0.4.0 | Eksperymentalna preempcja zadań Ring 0 przez IRQ0 i osobne stosy; CI QEMU |
 | v0.5.0 | Task Lifecycle, bezpieczny reaping, GDT/TSS i stosy IST; walidacja w QEMU |
-| v0.6.0–v0.9.0 | Blokowanie/wybudzanie, synchronizacja i dalsze usługi kernela |
+| v0.6.0 | Task Blocking, Wakeup & Synchronization Core; wait queues i mutex w jednordzeniowym Ring 0 (walidacja CI wymagana) |\n| v0.7.0–v0.9.0 | Timeouty, semafory, IPC i dalsze usługi kernela |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
