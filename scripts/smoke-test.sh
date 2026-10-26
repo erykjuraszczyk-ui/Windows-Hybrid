@@ -20,10 +20,16 @@ timeout 12s qemu-system-x86_64 \
   -serial stdio \
   -monitor none \
   -no-reboot \
-  -no-shutdown >"$log_file" 2>&1
+  -no-shutdown \
+  -d int,cpu_reset,guest_errors \
+  -D build/qemu-debug.log >"$log_file" 2>&1
 qemu_status=$?
 set -e
 cat "$log_file"
+if grep -Fq "FAIL: missing expected boot marker" "$log_file"; then
+  echo "---- QEMU CPU/interrupt trace (last 200 lines) ----"
+  tail -n 200 build/qemu-debug.log || true
+fi
 required_markers=(
   "HYBRID: MEMORY_MAP_OK"
   "HYBRID: MEMORY_SELFTEST_OK"
