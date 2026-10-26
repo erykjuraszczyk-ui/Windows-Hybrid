@@ -30,6 +30,7 @@ static uint64_t failed_count;
 #define SCHEDULER_NO_TASK UINT32_MAX
 #define SCHEDULER_PREEMPTIVE_TEST_TICKS 12U
 #define SCHEDULER_BLOCKING_TEST_TICKS 40U
+#define SCHEDULER_SEMAPHORE_IPC_TEST_TICKS 48U
 struct scheduler_interrupt_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
@@ -555,6 +556,311 @@ bool scheduler_mutex_unlock(scheduler_mutex_t *mutex) {
     (void)wait_queue_wake_one_locked(&mutex->waiters);
     scheduler_irq_restore(flags);
     return true;
+}
+
+static bool scheduler_block_current_locked(scheduler_wait_queue_t *queue, uint32_t *index_out) {
+    if (queue == NULL || index_out == NULL || !preemptive_active) return false;
+    const uint32_t index = current_task_index;
+    if (index >= SCHEDULER_MAX_TASKS ||
+        task_table[index].state != SCHEDULER_TASK_RUNNING ||
+        task_table[index].waiting_on != NULL) return false;
+    scheduler_task_t *task = &task_table[index];
+    queue->waiters |= UINT32_C(1) << index;
+    task->waiting_on = queue;
+    task->wait_deadline = 0U;
+    task->has_deadline = false;
+    task->wait_result = SCHEDULER_WAITING;
+    task->state = SCHEDULER_TASK_BLOCKED;
+    *index_out = index;
+    return true;
+}
+
+static bool scheduler_wait_for_blocked_task(uint32_t index) {
+    while (index < SCHEDULER_MAX_TASKS && task_table[index].state == SCHEDULER_TASK_BLOCKED)
+        __asm__ volatile ("sti; hlt; cli" : : : "memory");
+    return index < SCHEDULER_MAX_TASKS &&
+           task_table[index].state == SCHEDULER_TASK_RUNNING;
+}
+
+void scheduler_semaphore_init(scheduler_semaphore_t *semaphore,
+                              uint32_t initial_count, uint32_t max_count) {
+    if (semaphore == NULL || max_count == 0U || initial_count > max_count) return;
+    const uint64_t flags = scheduler_irq_save_disable();
+    semaphore->count = initial_count;
+    semaphore->max_count = max_count;
+    semaphore->waiters.waiters = 0U;
+    scheduler_irq_restore(flags);
+}
+
+bool scheduler_semaphore_wait(scheduler_semaphore_t *semaphore) {
+    if (semaphore == NULL) return false;
+    for (;;) {
+        const uint64_t flags = scheduler_irq_save_disable();
+        if (semaphore->max_count == 0U || semaphore->count > semaphore->max_count) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (semaphore->count > 0U) {
+            --semaphore->count;
+            scheduler_irq_restore(flags);
+            return true;
+        }
+        uint32_t index = SCHEDULER_NO_TASK;
+        if (!scheduler_block_current_locked(&semaphore->waiters, &index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_irq_restore(flags);
+        const bool resumed = scheduler_wait_for_blocked_task(index);
+        const bool handed_token = resumed &&
+            task_table[index].wait_result == SCHEDULER_WAIT_SIGNALED;
+        scheduler_irq_restore(flags);
+        return handed_token;
+    }
+}
+
+bool scheduler_semaphore_post(scheduler_semaphore_t *semaphore) {
+    if (semaphore == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (semaphore->max_count == 0U || semaphore->count > semaphore->max_count) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    if (semaphore->waiters.waiters != 0U &&
+        wait_queue_wake_one_locked(&semaphore->waiters)) {
+        scheduler_irq_restore(flags);
+        return true;
+    }
+    if (semaphore->count == semaphore->max_count) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    ++semaphore->count;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
+    if (channel == NULL) return;
+    const uint64_t flags = scheduler_irq_save_disable();
+    channel->head = 0U;
+    channel->tail = 0U;
+    channel->count = 0U;
+    channel->readers.waiters = 0U;
+    channel->writers.waiters = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
+        channel->messages[i].type = 0U;
+        channel->messages[i].length = 0U;
+        for (uint32_t j = 0U; j < SCHEDULER_IPC_PAYLOAD_SIZE; ++j)
+            channel->messages[i].payload[j] = 0U;
+    }
+    scheduler_irq_restore(flags);
+}
+
+static bool scheduler_ipc_message_valid(const scheduler_ipc_message_t *message) {
+    return message != NULL && message->length <= SCHEDULER_IPC_PAYLOAD_SIZE;
+}
+
+static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
+                                       const scheduler_ipc_message_t *source) {
+    destination->type = source->type;
+    destination->length = source->length;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
+        destination->payload[i] = source->payload[i];
+}
+
+bool scheduler_ipc_send(scheduler_ipc_channel_t *channel,
+                        const scheduler_ipc_message_t *message) {
+    if (channel == NULL || !scheduler_ipc_message_valid(message)) return false;
+    for (;;) {
+        const uint64_t flags = scheduler_irq_save_disable();
+        if (channel->count > SCHEDULER_IPC_CAPACITY ||
+            channel->head >= SCHEDULER_IPC_CAPACITY ||
+            channel->tail >= SCHEDULER_IPC_CAPACITY) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (channel->count < SCHEDULER_IPC_CAPACITY) {
+            scheduler_ipc_message_copy(&channel->messages[channel->tail], message);
+            channel->tail = (channel->tail + 1U) % SCHEDULER_IPC_CAPACITY;
+            ++channel->count;
+            if (channel->readers.waiters != 0U)
+                (void)wait_queue_wake_one_locked(&channel->readers);
+            scheduler_irq_restore(flags);
+            return true;
+        }
+        uint32_t index = SCHEDULER_NO_TASK;
+        if (!scheduler_block_current_locked(&channel->writers, &index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_irq_restore(flags);
+        if (!scheduler_wait_for_blocked_task(index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_irq_restore(flags);
+    }
+}
+
+bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
+                           scheduler_ipc_message_t *message) {
+    if (channel == NULL || message == NULL) return false;
+    for (;;) {
+        const uint64_t flags = scheduler_irq_save_disable();
+        if (channel->count > SCHEDULER_IPC_CAPACITY ||
+            channel->head >= SCHEDULER_IPC_CAPACITY ||
+            channel->tail >= SCHEDULER_IPC_CAPACITY) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (channel->count > 0U) {
+            scheduler_ipc_message_copy(message, &channel->messages[channel->head]);
+            channel->head = (channel->head + 1U) % SCHEDULER_IPC_CAPACITY;
+            --channel->count;
+            if (channel->writers.waiters != 0U)
+                (void)wait_queue_wake_one_locked(&channel->writers);
+            scheduler_irq_restore(flags);
+            return true;
+        }
+        uint32_t index = SCHEDULER_NO_TASK;
+        if (!scheduler_block_current_locked(&channel->readers, &index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_irq_restore(flags);
+        if (!scheduler_wait_for_blocked_task(index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_irq_restore(flags);
+    }
+}
+
+static scheduler_semaphore_t semaphore_ipc_test_sem;
+static scheduler_ipc_channel_t semaphore_ipc_test_channel;
+static volatile uint32_t semaphore_ipc_test_sem_acquired;
+static volatile uint32_t semaphore_ipc_test_sem_posted;
+static volatile uint32_t semaphore_ipc_test_sent;
+static volatile uint32_t semaphore_ipc_test_received;
+static volatile uint32_t semaphore_ipc_test_errors;
+
+static void semaphore_ipc_test_waiter(void) {
+    if (scheduler_semaphore_wait(&semaphore_ipc_test_sem))
+        ++semaphore_ipc_test_sem_acquired;
+    else
+        ++semaphore_ipc_test_errors;
+}
+
+static void semaphore_ipc_test_poster(void) {
+    if (scheduler_semaphore_post(&semaphore_ipc_test_sem))
+        ++semaphore_ipc_test_sem_posted;
+    else
+        ++semaphore_ipc_test_errors;
+}
+
+static void semaphore_ipc_test_sender(void) {
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY + 1U; ++i) {
+        scheduler_ipc_message_t message = {0};
+        message.type = UINT32_C(0x48594252);
+        message.length = 2U;
+        message.payload[0] = (uint8_t)i;
+        message.payload[1] = (uint8_t)(i ^ UINT32_C(0xA5));
+        if (!scheduler_ipc_send(&semaphore_ipc_test_channel, &message)) {
+            ++semaphore_ipc_test_errors;
+            return;
+        }
+        ++semaphore_ipc_test_sent;
+    }
+}
+
+static void semaphore_ipc_test_receiver(void) {
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY + 1U; ++i) {
+        scheduler_ipc_message_t message = {0};
+        if (!scheduler_ipc_receive(&semaphore_ipc_test_channel, &message)) {
+            ++semaphore_ipc_test_errors;
+            return;
+        }
+        if (message.type != UINT32_C(0x48594252) || message.length != 2U ||
+            message.payload[0] != (uint8_t)i ||
+            message.payload[1] != (uint8_t)(i ^ UINT32_C(0xA5)))
+            ++semaphore_ipc_test_errors;
+        ++semaphore_ipc_test_received;
+    }
+}
+
+bool scheduler_semaphore_ipc_self_test(void) {
+    scheduler_init();
+    scheduler_semaphore_init(&semaphore_ipc_test_sem, 0U, 1U);
+    scheduler_ipc_channel_init(&semaphore_ipc_test_channel);
+    semaphore_ipc_test_sem_acquired = 0U;
+    semaphore_ipc_test_sem_posted = 0U;
+    semaphore_ipc_test_sent = 0U;
+    semaphore_ipc_test_received = 0U;
+    semaphore_ipc_test_errors = 0U;
+
+    if (semaphore_ipc_test_sem.count != 0U ||
+        semaphore_ipc_test_sem.max_count != 1U ||
+        scheduler_semaphore_wait(NULL) ||
+        scheduler_semaphore_post(NULL) ||
+        scheduler_ipc_send(NULL, NULL) ||
+        scheduler_ipc_receive(NULL, NULL)) return false;
+    scheduler_ipc_message_t invalid = {0};
+    invalid.length = SCHEDULER_IPC_PAYLOAD_SIZE + 1U;
+    if (scheduler_ipc_send(&semaphore_ipc_test_channel, &invalid)) return false;
+
+    scheduler_task_id_t waiter = 0U, poster = 0U, sender = 0U, receiver = 0U;
+    if (!scheduler_task_create(semaphore_ipc_test_waiter, &waiter) ||
+        !scheduler_task_create(semaphore_ipc_test_poster, &poster) ||
+        !scheduler_task_create(semaphore_ipc_test_sender, &sender) ||
+        !scheduler_task_create(semaphore_ipc_test_receiver, &receiver)) return false;
+
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    preemptive_tick_limit = SCHEDULER_SEMAPHORE_IPC_TEST_TICKS;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_SEMAPHORE_IPC_TEST_TICKS;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+
+    const bool passed = waited && !preemptive_active && bootstrap_frame == NULL &&
+        scheduler_task_state(waiter) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(poster) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(sender) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(receiver) == SCHEDULER_TASK_EXITED &&
+        semaphore_ipc_test_sem_acquired == 1U && semaphore_ipc_test_sem_posted == 1U &&
+        semaphore_ipc_test_sem.count == 0U &&
+        semaphore_ipc_test_sem.waiters.waiters == 0U &&
+        semaphore_ipc_test_sent == SCHEDULER_IPC_CAPACITY + 1U &&
+        semaphore_ipc_test_received == SCHEDULER_IPC_CAPACITY + 1U &&
+        semaphore_ipc_test_channel.count == 0U &&
+        semaphore_ipc_test_channel.readers.waiters == 0U &&
+        semaphore_ipc_test_channel.writers.waiters == 0U &&
+        semaphore_ipc_test_errors == 0U && scheduler_failed_count() == 0U;
+    const bool reaped = passed && scheduler_task_reap(waiter) &&
+        scheduler_task_reap(poster) && scheduler_task_reap(sender) &&
+        scheduler_task_reap(receiver);
+    if (!passed || !reaped) {
+        serial_write("HYBRID: SEMAPHORE_IPC_DIAG states=");
+        serial_write_hex64(scheduler_task_state(waiter)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(poster)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(sender)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(receiver));
+        serial_write(" sem="); serial_write_hex64(semaphore_ipc_test_sem.count);
+        serial_write(" sem_waiters="); serial_write_hex64(semaphore_ipc_test_sem.waiters.waiters);
+        serial_write(" sent="); serial_write_hex64(semaphore_ipc_test_sent);
+        serial_write(" received="); serial_write_hex64(semaphore_ipc_test_received);
+        serial_write(" ipc_count="); serial_write_hex64(semaphore_ipc_test_channel.count);
+        serial_write(" readers="); serial_write_hex64(semaphore_ipc_test_channel.readers.waiters);
+        serial_write(" writers="); serial_write_hex64(semaphore_ipc_test_channel.writers.waiters);
+        serial_write(" errors="); serial_write_hex64(semaphore_ipc_test_errors);
+        serial_write("
+");
+    }
+    return passed && reaped;
 }
 
 void *scheduler_on_timer_interrupt(void *interrupt_frame) {
