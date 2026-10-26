@@ -138,6 +138,7 @@ bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *messag
                                            uint32_t request_id);
 uint32_t scheduler_ipc_service_count(void);
 bool scheduler_ipc_service_self_test(void);
+bool scheduler_ipc_request_response_discovery_self_test(void);
 bool scheduler_blocking_sync_self_test(void);
 void *scheduler_on_timer_interrupt(void *interrupt_frame);
 bool scheduler_preemptive_self_test(void);
