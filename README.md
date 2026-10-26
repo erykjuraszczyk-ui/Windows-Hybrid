@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.5.0 — Task Lifecycle oraz GDT/TSS/IST; walidacja przez CI/QEMU w toku.
+**Aktualny etap:** v0.5.0 — Task Lifecycle oraz GDT/TSS/IST; **CI PASS w skonfigurowanym QEMU**.
 
 ## Historia statusu
 
@@ -9,7 +9,18 @@
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, IDT, wyjątek i PIT.
 - **v0.3.0 — CI PASS w QEMU:** kooperatywny scheduler round-robin.
 - **v0.4.0 — CI PASS w QEMU:** test przełączania kontekstu dwóch zadań Ring 0 przez IRQ0.
-- **v0.5.0 — w trakcie walidacji:** własne GDT/TSS, stosy IST dla krytycznych wyjątków, tworzenie/zakończenie/reaping zadań i test odzyskiwania stron stosów.
+- **v0.5.0 — CI PASS w QEMU:** GDT/TSS/IST, cykl życia zadań, naturalne zakończenie i bezpieczne odzyskiwanie stron stosów.
+
+## Potwierdzenie v0.5.0
+
+[Udany przebieg GitHub Actions #40307342604](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40307342604) potwierdził:
+- `HYBRID: TSS_OK`, `IDT_OK` i `IST_OK`;
+- `HYBRID: EXCEPTION_SELFTEST_OK` oraz `TIMER_OK ticks=5`;
+- `HYBRID: TASK_LIFECYCLE_SELFTEST_OK`;
+- `HYBRID: PREEMPTIVE_SELFTEST_OK switches=1 task_a=50000 task_b=50000`;
+- `HYBRID: BOOT_OK`.
+
+Artefakt CI `hybrid-os-v0.5.0` zawiera kernel ELF, obraz ISO oraz logi QEMU. Test uruchomiono w konfiguracji `qemu-system-x86_64 -machine q35 -cpu qemu64,-apic`.
 
 ## Zakres v0.5.0
 
@@ -18,7 +29,6 @@
 - IDT przypisuje IST1 do #DF, IST2 do #GP, IST3 do #PF i IST4 do NMI.
 - Task API nadaje niezerowe, monotoniczne identyfikatory, prowadzi stany READY/RUNNING/EXITED/FAILED i odrzuca próbę odzyskania stosu zadania, które jeszcze wykonuje się na tym stosie.
 - Reaping jest odroczony do chwili, gdy scheduler wróci ze stosu zadania; potem zwalniana jest strona stosu i slot może zostać ponownie użyty bez ponownego użycia identyfikatora.
-- CI w QEMU sprawdza TSS/IST, cykl życia zadania, naturalne zakończenie dwóch zadań oraz odzyskanie stron stosów.
 
 **Granice bezpieczeństwa:** wszystkie zadania nadal działają w Ring 0. TSS/IST zapewnia osobne stosy obsługi wejść i wyjątków, ale nie tworzy izolacji procesów ani sandboxa. Nie ma jeszcze Ring 3, SMP, zapisu FPU/SSE/AVX, blokowania/wybudzania ani kontrolowanego testu #DF przez fault-injection. Wynik QEMU nie jest certyfikacją fizycznego sprzętu.
 
@@ -31,7 +41,7 @@ Na Ubuntu/Debian:
     make clean
     make test
 
-Log poprawnego testu powinien zawierać: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`.
+Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_LIFECYCLE_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` oraz `BOOT_OK`.
 
 ## Dokumentacja
 
