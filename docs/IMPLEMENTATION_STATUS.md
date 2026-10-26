@@ -45,7 +45,7 @@ Funkcje poza zakresem zaliczonych testów pozostają SPECIFIED / NOT VERIFIED.
 
 ## HYBRID OS v0.6.0 — Task Blocking, Wakeup & Synchronization Core
 
-**Status: implementation committed on a feature branch; CI validation pending.**
+**Status: CI PASS in QEMU.**
 
 - Added the `BLOCKED` task state and guarded `scheduler_task_block()` / `scheduler_task_wake()` transitions for ready step-based tasks.
 - Added preemptive-task wait queues with wake-one and wake-all operations. A waiting task records its queue and is made READY by a wake operation; the timer scheduler does not silently turn BLOCKED tasks back into READY.
@@ -53,3 +53,17 @@ Funkcje poza zakresem zaliczonych testów pozostają SPECIFIED / NOT VERIFIED.
 - Added a QEMU self-test for wait/wakeup and mutex contention, with the marker `HYBRID: BLOCKING_SYNC_SELFTEST_OK`.
 
 The implementation is not considered validated until `make test` passes in CI and the marker is present in the serial log. This does not provide SMP-safe locking, priority inheritance, timeouts, cancellation, or process isolation.
+
+
+## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
+
+**Status: implementation committed on a feature branch; CI validation pending.**
+
+- `scheduler_sleep_ticks(ticks)`: block the current preemptive task until a relative PIT tick deadline expires.
+- `scheduler_wait_queue_wait_timeout(queue, timeout_ticks)`: wait for a queue wakeup or return false after its deadline.
+- Tick-expiry processing runs from the PIT-driven scheduler path and removes the task from its wait queue before marking it READY.
+- `scheduler_task_cancel(id)` cancels READY/BLOCKED tasks only, unlinks pending waiters, clears deadlines and marks the task CANCELLED. Running tasks are deliberately not force-terminated.
+- Reaping accepts CANCELLED tasks only after the scheduler has stopped and the task is no longer linked to a wait queue.
+- Regression test covers timeout after 4 ticks, sleep completion after 6 ticks and cancellation of an indefinitely blocked task.
+
+Required QEMU markers: `HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK` and `HYBRID: BOOT_OK`. The feature is not considered validated until the latest CI run passes. Current implementation remains single-core Ring 0 and is not SMP-safe.
