@@ -863,8 +863,7 @@ bool scheduler_semaphore_ipc_self_test(void) {
         serial_write(" readers="); serial_write_hex64(semaphore_ipc_test_channel.readers.waiters);
         serial_write(" writers="); serial_write_hex64(semaphore_ipc_test_channel.writers.waiters);
         serial_write(" errors="); serial_write_hex64(semaphore_ipc_test_errors);
-        serial_write("
-");
+        serial_write("\n");
     }
     return passed && reaped;
 }
