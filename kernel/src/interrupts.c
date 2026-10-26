@@ -15,8 +15,10 @@ struct idt_register { uint16_t limit; uint64_t base; } __attribute__((packed));
 struct interrupt_frame {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
     uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
-    uint64_t vector, error_code, rip, cs, rflags;
+    uint64_t vector, error_code, rip, cs, rflags, rsp, ss;
 };
+_Static_assert(sizeof(struct interrupt_frame) == 176U,
+               "64-bit hardware interrupt frame includes RSP and SS");
 extern void (*isr_stub_table[])(void);
 extern void isr_default_stub(void);
 static struct idt_gate idt[IDT_ENTRIES] __attribute__((aligned(16)));
