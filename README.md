@@ -1,17 +1,26 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.3.0 — kooperatywny Scheduler Core, CI PASS w QEMU.
+**Aktualny etap:** v0.4.0 — timer-driven Preemptive Scheduler, CI PASS w skonfigurowanym QEMU.
 
 ## Status
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, podstawowa IDT, test wyjątku i PIT.
-- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin oparty na krótkich krokach zadań.
+- **v0.3.0 — CI PASS w QEMU:** kooperatywny planista round-robin typu step/callback.
+- **v0.4.0 — CI PASS w QEMU:** ograniczony test wywłaszczania dwóch zadań Ring 0 przez IRQ0, każde z własnym stosem 4 KiB i pełną ramką kontekstu long mode.
 
-Scheduler v0.3.0 zarządza stałą tablicą maksymalnie 8 zadań, ich stanami oraz przydziałem w cyklu round-robin. Samotest sprawdza kolejność wykonywania, ukończenie zadań, pustą kolejkę i odmowę przekroczenia pojemności.
+## Co potwierdza v0.4.0
 
-**Ograniczenie:** to planista kooperatywny typu step/callback. Nie przełącza stosów ani rejestrów CPU i nie zapewnia jeszcze preempcji, procesów Ring 3 ani SMP. Nie jest to kompletny system operacyjny ani zamiennik Windows/Linux.
+Przebieg CI [#40299062307](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40299062307) zakończył się sukcesem. Log zawiera:
+- `HYBRID: TIMER_OK ticks=5`
+- `HYBRID: SCHEDULER_SELFTEST_OK dispatches=11`
+- `HYBRID: PREEMPTIVE_SELFTEST_OK switches=10` z dodatnimi licznikami obu zadań
+- `HYBRID: BOOT_OK`
+
+Test używa PIC/PIT w QEMU z `-cpu qemu64,-apic`. Pełna ramka kontekstu obejmuje rejestry, vector/error code, RIP/CS/RFLAGS oraz RSP/SS, a po 12 tyknięciach scheduler wraca do zapisanego kontekstu bootstrapu.
+
+**Ograniczenia:** to eksperymentalny, jednordzeniowy prototyp wywłaszczania zadań jądra Ring 0. Nie ma przejść do Ring 3, TSS/IST, SMP, zapisu stanu FPU/SSE/AVX ani ogólnego API blokowania/wybudzania. CI PASS potwierdza ten test w QEMU, nie zgodność z fizycznym sprzętem ani gotowość produkcyjną.
 
 ## Uruchomienie
 
@@ -22,16 +31,16 @@ Na Ubuntu/Debian:
     make clean
     make test
 
-Test CI v0.3.0 potwierdził markery `TIMER_OK ticks=5`, `SCHEDULER_SELFTEST_OK dispatches=11` oraz `BOOT_OK`.
+Test wymaga markerów `TIMER_OK`, `SCHEDULER_SELFTEST_OK`, `PREEMPTIVE_SELFTEST_OK` i `BOOT_OK`.
 
-## Dokumentacja projektu
+## Dokumentacja
 
 - [Indeks dokumentów](docs/INDEX.md)
 - [Mapa drogowa](docs/ROADMAP.md)
 - [Architektura](docs/ARCHITECTURE.md)
 - [Model bezpieczeństwa](docs/SECURITY_MODEL.md)
-- [Testowanie i kryteria akceptacji](docs/TESTING.md)
-- [Proces kompilacji i wydań](docs/RELEASE_PROCESS.md)
+- [Testowanie](docs/TESTING.md)
+- [Proces wydań](docs/RELEASE_PROCESS.md)
 - [Status implementacji](docs/IMPLEMENTATION_STATUS.md)
 - [HYBRID OS v0.3.0 — Scheduler Core](docs/BOOTSTRAP_v0.3.0.md)
-- [Zbiorcze specyfikacje v0.1.0–v3.0.0](docs/versions/HYBRID_OS_v0.1.0-v3.0.0.md)
+- [HYBRID OS v0.4.0 — Preemptive Scheduler](docs/BOOTSTRAP_v0.4.0.md)

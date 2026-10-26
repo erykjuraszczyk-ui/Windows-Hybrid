@@ -1,12 +1,18 @@
 #include "scheduler.h"
+#include "console.h"
+#include "interrupts.h"
+#include "memory.h"
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
     scheduler_task_id_t id;
-    scheduler_task_state_t state;
+    volatile scheduler_task_state_t state;
     scheduler_step_fn step;
     void *context;
+    scheduler_task_entry_fn entry;
+    void * volatile saved_frame;
+    uint64_t stack_physical;
 } scheduler_task_t;
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
@@ -16,6 +22,64 @@ static bool dispatch_in_progress;
 static uint64_t dispatch_count;
 static uint64_t completed_count;
 static uint64_t failed_count;
+#define SCHEDULER_NO_TASK UINT32_MAX
+#define SCHEDULER_PREEMPTIVE_TEST_TICKS 12U
+struct scheduler_interrupt_frame {
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t vector, error_code, rip, cs, rflags, rsp, ss;
+};
+_Static_assert(sizeof(struct scheduler_interrupt_frame) == 176U,
+               "64-bit interrupt frame must include RSP and SS");
+static volatile bool preemptive_active;
+static void * volatile bootstrap_frame;
+static volatile uint32_t current_task_index;
+static volatile uint64_t preemptive_ticks, preemptive_switches;
+static volatile uint64_t test_counter_a, test_counter_b;
+
+static uint32_t find_unused_slot(void) {
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i)
+        if (task_table[i].state == SCHEDULER_TASK_UNUSED) return i;
+    return SCHEDULER_NO_TASK;
+}
+static uint32_t find_task_index(scheduler_task_id_t id) {
+    if (id == 0U) return SCHEDULER_NO_TASK;
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i)
+        if (task_table[i].id == id) return i;
+    return SCHEDULER_NO_TASK;
+}
+static uint16_t scheduler_current_cs(void) {
+    uint16_t selector;
+    __asm__ volatile ("mov %%cs, %0" : "=r"(selector));
+    return selector;
+}
+static uint16_t scheduler_current_ss(void) {
+    uint16_t selector;
+    __asm__ volatile ("mov %%ss, %0" : "=r"(selector));
+    return selector;
+}
+static uint32_t find_next_preemptive_task(uint32_t after_index) {
+    const uint32_t start = after_index == SCHEDULER_NO_TASK ? SCHEDULER_MAX_TASKS - 1U : after_index;
+    for (uint32_t offset = 1U; offset <= SCHEDULER_MAX_TASKS; ++offset) {
+        const uint32_t index = (start + offset) % SCHEDULER_MAX_TASKS;
+        if (task_table[index].state == SCHEDULER_TASK_READY &&
+            task_table[index].entry != NULL && task_table[index].saved_frame != NULL)
+            return index;
+    }
+    return SCHEDULER_NO_TASK;
+}
+static void scheduler_task_trampoline(void) __attribute__((noreturn));
+static void scheduler_task_trampoline(void) {
+    const uint32_t index = current_task_index;
+    if (index < SCHEDULER_MAX_TASKS && task_table[index].entry != NULL)
+        task_table[index].entry();
+    __asm__ volatile ("cli" : : : "memory");
+    if (index < SCHEDULER_MAX_TASKS && task_table[index].state == SCHEDULER_TASK_RUNNING) {
+        task_table[index].state = SCHEDULER_TASK_EXITED;
+        ++completed_count;
+    }
+    for (;;) __asm__ volatile ("sti; hlt" : : : "memory");
+}
 
 void scheduler_init(void) {
     for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
@@ -23,6 +87,9 @@ void scheduler_init(void) {
         task_table[i].state = SCHEDULER_TASK_UNUSED;
         task_table[i].step = NULL;
         task_table[i].context = NULL;
+        task_table[i].entry = NULL;
+        task_table[i].saved_frame = NULL;
+        task_table[i].stack_physical = 0U;
     }
     scheduler_cursor = 0U;
     next_task_id = 1U;
@@ -30,10 +97,17 @@ void scheduler_init(void) {
     dispatch_count = 0U;
     completed_count = 0U;
     failed_count = 0U;
+    preemptive_active = false;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    test_counter_a = 0U;
+    test_counter_b = 0U;
 }
 
 bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task_id_t *task_id) {
-    if (step == NULL || task_id == NULL || dispatch_in_progress || next_task_id == 0U) {
+    if (step == NULL || task_id == NULL || dispatch_in_progress || preemptive_active || next_task_id == 0U) {
         return false;
     }
     for (uint32_t offset = 0U; offset < SCHEDULER_MAX_TASKS; ++offset) {
@@ -44,6 +118,9 @@ bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task
         task->state = SCHEDULER_TASK_READY;
         task->step = step;
         task->context = context;
+        task->entry = NULL;
+        task->saved_frame = NULL;
+        task->stack_physical = 0U;
         *task_id = task->id;
         return true;
     }
@@ -51,12 +128,12 @@ bool scheduler_create_task(scheduler_step_fn step, void *context, scheduler_task
 }
 
 bool scheduler_run_once(void) {
-    if (dispatch_in_progress) return false;
+    if (dispatch_in_progress || preemptive_active) return false;
     scheduler_task_t *selected = NULL;
     uint32_t selected_index = 0U;
     for (uint32_t offset = 0U; offset < SCHEDULER_MAX_TASKS; ++offset) {
         const uint32_t index = (scheduler_cursor + offset) % SCHEDULER_MAX_TASKS;
-        if (task_table[index].state == SCHEDULER_TASK_READY) {
+        if (task_table[index].state == SCHEDULER_TASK_READY && task_table[index].step != NULL) {
             selected = &task_table[index];
             selected_index = index;
             break;
@@ -99,6 +176,136 @@ uint32_t scheduler_ready_count(void) {
 uint64_t scheduler_dispatch_count(void) { return dispatch_count; }
 uint64_t scheduler_completed_count(void) { return completed_count; }
 uint64_t scheduler_failed_count(void) { return failed_count; }
+
+bool scheduler_create_preemptive_task(scheduler_task_entry_fn entry, scheduler_task_id_t *task_id) {
+    if (entry == NULL || task_id == NULL || dispatch_in_progress || preemptive_active ||
+        next_task_id == 0U) return false;
+    const uint32_t index = find_unused_slot();
+    if (index == SCHEDULER_NO_TASK) return false;
+
+    uint64_t physical = 0U;
+    if (!memory_alloc_page(&physical)) return false;
+    void *virtual_base = memory_phys_to_virt(physical);
+    if (virtual_base == NULL) { (void)memory_free_page(physical); return false; }
+
+    /* iretq enters the task with SysV RSP % 16 == 8. */
+    const uintptr_t top = (uintptr_t)virtual_base + (uintptr_t)HYBRID_PAGE_SIZE - 8U;
+    struct scheduler_interrupt_frame *frame =
+        (struct scheduler_interrupt_frame *)(top - sizeof(*frame));
+    uint64_t *words = (uint64_t *)frame;
+    for (uint32_t i = 0U; i < 22U; ++i) words[i] = 0U;
+    frame->vector = 32U;
+    frame->error_code = 0U;
+    frame->rip = (uint64_t)(uintptr_t)scheduler_task_trampoline;
+    frame->cs = (uint64_t)scheduler_current_cs();
+    frame->rflags = UINT64_C(0x202);
+    frame->rsp = (uint64_t)top;
+    frame->ss = (uint64_t)scheduler_current_ss();
+
+    scheduler_task_t *task = &task_table[index];
+    task->id = next_task_id++;
+    task->state = SCHEDULER_TASK_READY;
+    task->step = NULL;
+    task->context = NULL;
+    task->entry = entry;
+    task->saved_frame = frame;
+    task->stack_physical = physical;
+    *task_id = task->id;
+    return true;
+}
+
+void *scheduler_on_timer_interrupt(void *interrupt_frame) {
+    if (!preemptive_active || interrupt_frame == NULL) return interrupt_frame;
+    uint32_t previous = current_task_index;
+    if (bootstrap_frame == NULL) {
+        bootstrap_frame = interrupt_frame;
+        previous = SCHEDULER_NO_TASK;
+    } else if (previous < SCHEDULER_MAX_TASKS) {
+        scheduler_task_t *task = &task_table[previous];
+        task->saved_frame = interrupt_frame;
+        if (task->state == SCHEDULER_TASK_RUNNING) task->state = SCHEDULER_TASK_READY;
+    }
+
+    ++preemptive_ticks;
+    if (preemptive_ticks >= SCHEDULER_PREEMPTIVE_TEST_TICKS) {
+        preemptive_active = false;
+        current_task_index = SCHEDULER_NO_TASK;
+        void *resume = (void *)bootstrap_frame;
+        bootstrap_frame = NULL;
+        return resume != NULL ? resume : interrupt_frame;
+    }
+
+    const uint32_t next = find_next_preemptive_task(previous);
+    if (next == SCHEDULER_NO_TASK) {
+        preemptive_active = false;
+        current_task_index = SCHEDULER_NO_TASK;
+        void *resume = (void *)bootstrap_frame;
+        bootstrap_frame = NULL;
+        return resume != NULL ? resume : interrupt_frame;
+    }
+    if (previous < SCHEDULER_MAX_TASKS && previous != next) ++preemptive_switches;
+    task_table[next].state = SCHEDULER_TASK_RUNNING;
+    current_task_index = next;
+    return (void *)task_table[next].saved_frame;
+}
+
+static void preemptive_test_a(void) {
+    for (;;) { ++test_counter_a; __asm__ volatile ("pause"); }
+}
+static void preemptive_test_b(void) {
+    for (;;) { ++test_counter_b; __asm__ volatile ("pause"); }
+}
+
+bool scheduler_preemptive_self_test(void) {
+    scheduler_init();
+    scheduler_task_id_t a = 0U, b = 0U;
+    if (!scheduler_create_preemptive_task(preemptive_test_a, &a)) return false;
+    if (!scheduler_create_preemptive_task(preemptive_test_b, &b)) {
+        const uint32_t ix = find_task_index(a);
+        if (ix < SCHEDULER_MAX_TASKS && task_table[ix].stack_physical != 0U) {
+            (void)memory_free_page(task_table[ix].stack_physical);
+            task_table[ix].stack_physical = 0U;
+            task_table[ix].saved_frame = NULL;
+            task_table[ix].entry = NULL;
+            task_table[ix].state = SCHEDULER_TASK_EXITED;
+        }
+        return false;
+    }
+
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    const uint64_t target = interrupts_ticks() + SCHEDULER_PREEMPTIVE_TEST_TICKS;
+    serial_write("HYBRID: PREEMPTIVE_START\n");
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+
+    const uint32_t ia = find_task_index(a), ib = find_task_index(b);
+    const bool ran = waited && !preemptive_active && bootstrap_frame == NULL &&
+        ia < SCHEDULER_MAX_TASKS && ib < SCHEDULER_MAX_TASKS &&
+        test_counter_a > 0U && test_counter_b > 0U &&
+        preemptive_switches >= (SCHEDULER_PREEMPTIVE_TEST_TICKS - 2U);
+
+    bool cleanup_ok = true;
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
+        if (task_table[i].stack_physical != 0U) {
+            if (!memory_free_page(task_table[i].stack_physical)) cleanup_ok = false;
+            task_table[i].stack_physical = 0U;
+            task_table[i].saved_frame = NULL;
+            task_table[i].entry = NULL;
+            if (task_table[i].state != SCHEDULER_TASK_FAILED)
+                task_table[i].state = SCHEDULER_TASK_EXITED;
+        }
+    }
+    return ran && cleanup_ok;
+}
+uint64_t scheduler_preemptive_switch_count(void) { return preemptive_switches; }
+uint64_t scheduler_preemptive_counter_a(void) { return test_counter_a; }
+uint64_t scheduler_preemptive_counter_b(void) { return test_counter_b; }
+
 
 typedef struct {
     uint32_t tag;

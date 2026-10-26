@@ -20,7 +20,9 @@ timeout 12s qemu-system-x86_64 \
   -serial stdio \
   -monitor none \
   -no-reboot \
-  -no-shutdown >"$log_file" 2>&1
+  -no-shutdown \
+  -d int,cpu_reset,guest_errors \
+  -D build/qemu-debug.log >"$log_file" 2>&1
 qemu_status=$?
 set -e
 cat "$log_file"
@@ -32,12 +34,15 @@ required_markers=(
   "HYBRID: EXCEPTION_SELFTEST_OK"
   "HYBRID: TIMER_OK"
   "HYBRID: SCHEDULER_SELFTEST_OK"
+  "HYBRID: PREEMPTIVE_SELFTEST_OK"
   "HYBRID: BOOT_OK"
 )
 for marker in "${required_markers[@]}"; do
   if ! grep -Fq "$marker" "$log_file"; then
     echo "FAIL: missing expected boot marker: $marker (QEMU exit: $qemu_status)." >&2
+    echo "---- QEMU CPU/interrupt trace (last 200 lines) ----"
+    tail -n 200 build/qemu-debug.log || true
     exit 1
   fi
 done
-echo "PASS: Memory Core, IDT, PIT timer, and cooperative Scheduler Core passed in QEMU."
+echo "PASS: Memory Core, IDT, PIT, cooperative scheduler, and timer-driven context switching passed in QEMU."
