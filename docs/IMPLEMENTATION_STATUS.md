@@ -88,7 +88,9 @@ Required QEMU markers: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` and `HYBRID: BOOT_OK`
 
 ## HYBRID OS v0.9.0 — IPC Services & Kernel Communication Layer
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS po scaleniu.**
+
+Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40350916069
 
 - `scheduler_ipc_service_register/lookup/unregister` zapewniają rejestrację, wyszukiwanie i kontrolowane wyrejestrowanie do 8 usług; nazwy są case-sensitive, do 15 bajtów plus NUL.
 - IDs są niezerowe, monotoniczne i nie są ponownie używane; rejestracja zostaje zablokowana po wyczerpaniu przestrzeni ID.
@@ -96,4 +98,18 @@ Required QEMU markers: `HYBRID: SEMAPHORE_IPC_SELFTEST_OK` and `HYBRID: BOOT_OK`
 - Wyrejestrowanie jest odrzucane, gdy istnieją wiadomości, waiterzy lub aktywne wywołania API. Aktywne referencje chronią endpoint podczas blokującego send/receive.
 - Test QEMU sprawdza niepoprawne nazwy, duplikaty, lookup, routing i metadane, odbiorcę blokującego się na pustym kanale, ochronę endpointu z wiadomością oraz czyste wyrejestrowanie.
 
-Oczekiwane markery: `HYBRID: IPC_SERVICES_SELFTEST_OK` i `HYBRID: BOOT_OK`. Funkcja pozostaje prototypem jednordzeniowego Ring 0; brak autoryzacji usług, izolacji procesów, SMP, limitów ruchu i dynamicznego zamykania kanałów z oczekującymi klientami.
+Potwierdzone markery: `HYBRID: IPC_SERVICES_SELFTEST_OK` i `HYBRID: BOOT_OK`. Funkcja pozostaje prototypem jednordzeniowego Ring 0; brak autoryzacji usług, izolacji procesów, SMP, limitów ruchu i dynamicznego zamykania kanałów z oczekującymi klientami.
+
+
+## HYBRID OS v0.10.0 — IPC Request/Response Protocol & Service Discovery
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Protokół wiadomości v1 zawiera `protocol_version`, `kind`, `status`, `source_service_id` i `request_id` oraz typ i payload. Typy: DATA, REQUEST, RESPONSE, ERROR i EVENT.
+- `scheduler_ipc_service_send_request()` wymaga niezerowego request ID oraz uprawnień capability REQUEST_RESPONSE u źródła i celu. `scheduler_ipc_service_reply()` sprawdza, czy wejście jest żądaniem protokołu v1, zachowuje request ID i zwraca RESPONSE dla OK lub ERROR dla statusu niezerowego.
+- `scheduler_ipc_message_is_response_for()` weryfikuje wersję protokołu, rodzaj odpowiedzi i zgodność identyfikatora korelacyjnego.
+- Discovery udostępnia `scheduler_ipc_service_register_ex()`, `scheduler_ipc_service_enumerate()` oraz `scheduler_ipc_service_get_info()`, w tym capabilities i bieżącą głębokość kolejki.
+- Rejestracja nadal ograniczona do ośmiu usług; identyfikatory nie są recyklingowane. Capability mask ma walidację. Usługa domyślna zachowuje dotychczasową kompatybilność API.
+- Test QEMU pokrywa odpowiedź OK, odpowiedź błędną UNSUPPORTED, zgodność/niezgodność request ID, błędną wersję i rodzaj wiadomości, enumerację, duplicate/case-sensitive lookup oraz czyszczenie usług.
+
+Wymagane markery: `HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK` i `HYBRID: BOOT_OK`. CI musi przejść dla najnowszej wersji źródeł przed zatwierdzeniem. Prototyp pozostaje single-core Ring 0, bez ACL, Ring 3, SMP, timeoutów request/reply i tablicy pending-call zarządzanej przez kernel.
