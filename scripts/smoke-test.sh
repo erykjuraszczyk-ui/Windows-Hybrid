@@ -40,6 +40,7 @@ required_markers=(
   "HYBRID: PREEMPTIVE_SELFTEST_OK"
   "HYBRID: BLOCKING_SYNC_SELFTEST_OK"
   "HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK"
+  "HYBRID: SEMAPHORE_IPC_SELFTEST_OK"
   "HYBRID: BOOT_OK"
 )
 for marker in "${required_markers[@]}"; do
@@ -50,4 +51,4 @@ for marker in "${required_markers[@]}"; do
     exit 1
   fi
 done
-echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timer sleep, timed waits and cancellation passed in QEMU."
+echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timer sleep, timed waits, cancellation, semaphores and bounded IPC passed in QEMU."
