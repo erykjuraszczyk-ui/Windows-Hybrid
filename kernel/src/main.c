@@ -213,7 +213,7 @@ static bool draw_splash(struct limine_framebuffer *fb) {
 void kmain(void) {
     __asm__ volatile ("cli" : : : "memory");
     console_init();
-    serial_write("\nHYBRID OS v0.6.0\n");
+    serial_write("\nHYBRID OS v0.7.0\n");
     serial_write("HYBRID: KERNEL_START\n");
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) {
         serial_write("HYBRID: FAIL_BOOT_PROTOCOL_REVISION\n");
@@ -309,6 +309,13 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: BLOCKING_SYNC_SELFTEST_OK\n");
+    if (!scheduler_timer_timeout_cancel_self_test()) {
+        serial_write("HYBRID: FAIL_TIMER_TIMEOUT_CANCEL\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: TIMER_TIMEOUT_CANCEL_SELFTEST_OK expirations=");
+    serial_write_hex64(scheduler_timer_expiration_count());
+    serial_write("\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
 }
