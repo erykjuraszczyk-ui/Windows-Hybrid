@@ -293,6 +293,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: TASK_LIFECYCLE_SELFTEST_OK\n");
+    if (!scheduler_sync_self_test()) {
+        serial_write("HYBRID: FAIL_SYNC_SELFTEST\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: SYNC_SELFTEST_OK\n");
     if (!scheduler_preemptive_self_test()) {
         serial_write("HYBRID: FAIL_PREEMPTIVE_SCHEDULER\n");
         cpu_halt();
