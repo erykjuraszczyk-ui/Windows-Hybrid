@@ -203,7 +203,7 @@ bool scheduler_create_preemptive_task(scheduler_task_entry_fn entry, scheduler_t
     serial_write(" flags=");
     serial_write_hex64(frame->rflags);
     serial_write(" stack=");
-    serial_write_hex64(stack_top);
+    serial_write_hex64(top);
     serial_write("\n");
 
     scheduler_task_t *task = &task_table[index];
