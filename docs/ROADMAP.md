@@ -22,7 +22,8 @@
 | v0.6.0 | Task Blocking, Wakeup & Synchronization Core; wait queues i mutex w jednordzeniowym Ring 0; CI PASS |
 | v0.7.0 | Sleep/Timer Core, timed wait queues, bezpieczne anulowanie READY/BLOCKED; CI PASS w QEMU |
 | v0.8.0 | Semafory zliczające i ograniczony kanał IPC; CI PASS w QEMU |
-| v0.9.0 | Rejestr nazwanych usług, routing wiadomości, request IDs i bezpieczne wyrejestrowanie; walidacja CI wymagana |
+| v0.9.0 | Rejestr nazwanych usług, routing wiadomości, request IDs i bezpieczne wyrejestrowanie; CI PASS po scaleniu |
+| v0.10.0 | Wersjonowany request/response, typowane błędy i service discovery; walidacja CI wymagana |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
