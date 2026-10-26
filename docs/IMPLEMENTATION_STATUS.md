@@ -8,21 +8,30 @@
 
 ## HYBRID OS v0.4.0 — Preemptive Scheduler
 
-**Status: oczekuje na CI.**
+**CI PASS w skonfigurowanym QEMU.**
 
-Gałąź `feat/hybrid-os-v0.4.0-preemptive` dodaje:
-- początkową ramkę CPU zgodną z układem rejestrów zapisanym przez ISR;
-- dwa zadania kernel-mode z niezależnymi stosami przydzielonymi przez Memory Core;
-- przełączenie RSP do ramki zwracanej przez dispatcher IRQ0;
-- bounded preemption test przez 12 tyknięć PIT, powrót do zapisanego stosu bootstrapu i sprawdzenie progresu obu zadań;
-- zwolnienie stron stosów po wyłączeniu preempcji;
-- wymagany marker `HYBRID: PREEMPTIVE_SELFTEST_OK`.
+Potwierdzający przebieg:
+https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40299062307
 
-## Ograniczenia i ryzyka
+Log końcowy:
+- `HYBRID: TIMER_OK ticks=0x0000000000000005`
+- `HYBRID: SCHEDULER_SELFTEST_OK dispatches=0x000000000000000B`
+- `HYBRID: PREEMPTIVE_SELFTEST_OK switches=0x000000000000000A` z dodatnim postępem `task_a` oraz `task_b`
+- `HYBRID: BOOT_OK`
+
+Implementacja:
+- pełna ramka kontekstu long mode z 15 rejestrami ogólnymi, vector/error code i RIP/CS/RFLAGS/RSP/SS;
+- dwa zadania kernel-mode z niezależnymi stosami 4 KiB przydzielonymi przez Memory Core;
+- przełączenie RSP na ramkę wybraną przez dispatcher IRQ0;
+- ograniczony test 12 tyknięć PIT, sprawdzenie progresu obu zadań i powrót do zapisanego stosu bootstrapu;
+- zwolnienie stron stosów po zatrzymaniu testu.
+
+Wynik dotyczy określonej konfiguracji QEMU z `-cpu qemu64,-apic`. Nie stanowi certyfikacji pracy na fizycznym sprzęcie.
+
+## Ograniczenia / ryzyka
 
 - Scheduler jest jednordzeniowy, działa wyłącznie w Ring 0 i jest włączany tylko na czas ograniczonego testu.
 - To nie jest pełny scheduler produkcyjny: brak Ring 3, TSS/IST, SMP, FPU/SSE/AVX save/restore, blokowania/wybudzania, idle task i pełnego lifecycle API.
-- Zmiana wymaga dokładnej zgodności ramki C ze stosem zapisanym przez `interrupt_stubs.S`; test QEMU ma odrzucić implementację, jeżeli wykonanie obu zadań nie zostanie potwierdzone.
-- Sukces QEMU nie potwierdza poprawności na fizycznym sprzęcie.
+- Testy QEMU nie dowodzą poprawności na fizycznym sprzęcie.
 
 Funkcje poza zakresem zaliczonych testów pozostają SPECIFIED / NOT VERIFIED.
