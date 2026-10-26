@@ -412,6 +412,7 @@ bool scheduler_mutex_lock(scheduler_mutex_t *mutex) {
         scheduler_irq_restore(flags);
         while (task_table[index].state == SCHEDULER_TASK_BLOCKED)
             __asm__ volatile ("sti; hlt; cli" : : : "memory");
+        scheduler_irq_restore(flags);
         if (task_table[index].state != SCHEDULER_TASK_RUNNING) return false;
     }
 }
@@ -488,9 +489,9 @@ static void blocking_test_waiter(void) {
 }
 static void blocking_test_signaler(void) {
     uint64_t guard = 0U;
-    while (blocking_test_waiting == 0U && guard++ < UINT64_C(1000000))
+    while (blocking_test_queue.waiters == 0U && guard++ < UINT64_C(1000000))
         __asm__ volatile ("pause");
-    if (blocking_test_waiting != 0U &&
+    if (blocking_test_queue.waiters != 0U &&
         scheduler_wait_queue_wake_one(&blocking_test_queue)) ++blocking_test_wake_ok;
 }
 static void blocking_test_mutex_worker(void) {
@@ -498,7 +499,7 @@ static void blocking_test_mutex_worker(void) {
         ++blocking_test_mutex_errors;
         return;
     }
-    for (uint32_t i = 0U; i < 10000U; ++i) {
+    for (uint32_t i = 0U; i < 1000000U; ++i) {
         ++blocking_test_protected_count;
         __asm__ volatile ("pause");
     }
@@ -535,7 +536,7 @@ bool scheduler_blocking_sync_self_test(void) {
         scheduler_task_state(worker_b) == SCHEDULER_TASK_EXITED &&
         blocking_test_waiting == 1U && blocking_test_resumed == 1U &&
         blocking_test_wake_ok == 1U &&
-        blocking_test_protected_count == 20000U &&
+        blocking_test_protected_count == 2000000U &&
         blocking_test_mutex_errors == 0U &&
         blocking_test_queue.waiters == 0U &&
         blocking_test_mutex.waiters.waiters == 0U &&
