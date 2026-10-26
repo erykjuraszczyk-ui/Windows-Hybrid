@@ -11,14 +11,14 @@ jobs:
   boot-smoke-test:
     name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup and synchronization in QEMU
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v5
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential binutils git curl xorriso qemu-system-x86
+          sudo apt-get install -y --no-install-recommends build-essential binutils git curl xorriso qemu-system-x86
       - name: Build ISO and run kernel regression tests
         run: make test
       - name: Upload kernel and ISO
