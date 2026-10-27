@@ -348,15 +348,23 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: IPC_BACKPRESSURE_SELFTEST_OK\n");
+    if (!scheduler_ipc_receipt_retry_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_RECEIPTS_RETRIES\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_RECEIPTS_RETRIES_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||
+        ipc_diagnostics.pending_deliveries != 0U ||
         ipc_diagnostics.active_services != 0U) {
         serial_write("HYBRID: FAIL_IPC_DIAGNOSTICS\n");
         cpu_halt();
     }
     serial_write("HYBRID: IPC_DIAGNOSTICS_OK pending=");
     serial_write_hex64(ipc_diagnostics.pending_calls);
+    serial_write(" deliveries=");
+    serial_write_hex64(ipc_diagnostics.pending_deliveries);
     serial_write(" services=");
     serial_write_hex64(ipc_diagnostics.active_services);
     serial_write("\n");
