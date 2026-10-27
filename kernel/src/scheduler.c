@@ -977,6 +977,11 @@ typedef struct {
     uint32_t active_calls;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
+    uint32_t priority;
+    uint32_t congestion_high_watermark;
+    uint32_t congestion_low_watermark;
+    bool congestion_control_enabled;
+    bool congested;
     uint64_t messages_enqueued;
     uint64_t messages_received;
     uint64_t backpressure_events;
@@ -1201,6 +1206,11 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->active_calls = 0U;
     free_slot->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     free_slot->queue_high_watermark = 0U;
+    free_slot->priority = 1U;
+    free_slot->congestion_high_watermark = 0U;
+    free_slot->congestion_low_watermark = 0U;
+    free_slot->congestion_control_enabled = false;
+    free_slot->congested = false;
     free_slot->messages_enqueued = 0U;
     free_slot->messages_received = 0U;
     free_slot->backpressure_events = 0U;
@@ -1258,6 +1268,8 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->queue_capacity = SCHEDULER_IPC_CAPACITY;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
+    info->priority = service->priority;
+    info->congested = service->congested;
     info->messages_enqueued = service->messages_enqueued;
     info->messages_received = service->messages_received;
     info->backpressure_events = service->backpressure_events;
@@ -1311,6 +1323,80 @@ bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_i
     service->queue_policy = policy;
     scheduler_irq_restore(flags);
     return true;
+}
+
+
+bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority) {
+    if (priority < SCHEDULER_IPC_PRIORITY_MIN || priority > SCHEDULER_IPC_PRIORITY_MAX)
+        return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->priority = priority;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
+                                                    uint32_t high_watermark,
+                                                    uint32_t low_watermark) {
+    if (high_watermark == 0U || high_watermark > SCHEDULER_IPC_CAPACITY ||
+        low_watermark >= high_watermark) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->congestion_high_watermark = high_watermark;
+    service->congestion_low_watermark = low_watermark;
+    service->congestion_control_enabled = true;
+    service->congested = service->channel.count >= high_watermark;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+/* Lower weighted queue occupancy wins; priority 8 has eight times the
+ * effective capacity of priority 1. Ties rotate across the candidate list. */
+bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
+                                           uint32_t candidate_count,
+                                           scheduler_ipc_service_id_t *selected_service_id) {
+    if (candidates == NULL || selected_service_id == NULL ||
+        candidate_count == 0U || candidate_count > SCHEDULER_IPC_MAX_SERVICES)
+        return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    bool found = false;
+    uint64_t best_score = UINT64_MAX;
+    scheduler_ipc_service_id_t best_id = 0U;
+    static uint32_t tie_cursor;
+    for (uint32_t n = 0U; n < candidate_count; ++n) {
+        const uint32_t i = (tie_cursor + n) % candidate_count;
+        scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(candidates[i]);
+        if (service == NULL || service->closing || service->congested ||
+            service->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN ||
+            service->channel.count > SCHEDULER_IPC_CAPACITY) continue;
+        const uint64_t score = ((uint64_t)service->channel.count * UINT64_C(1000)) /
+                               (uint64_t)service->priority;
+        if (!found || score < best_score) {
+            found = true;
+            best_score = score;
+            best_id = service->id;
+        }
+    }
+    if (found) {
+        *selected_service_id = best_id;
+        for (uint32_t i = 0U; i < candidate_count; ++i) {
+            if (candidates[i] == best_id) {
+                tie_cursor = (i + 1U) % candidate_count;
+                break;
+            }
+        }
+    }
+    scheduler_irq_restore(flags);
+    return found;
 }
 
 bool scheduler_ipc_service_set_circuit_breaker(scheduler_ipc_service_id_t service_id,
@@ -1564,6 +1650,12 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     }
 
     scheduler_ipc_channel_t *channel = &destination->channel;
+    if (destination->congestion_control_enabled && destination->congested) {
+        ++destination->backpressure_events;
+        ++ipc_diag_backpressure_events;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
+    }
     if (channel->count > SCHEDULER_IPC_CAPACITY ||
         channel->head >= SCHEDULER_IPC_CAPACITY ||
         channel->tail >= SCHEDULER_IPC_CAPACITY) {
@@ -1607,6 +1699,9 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     channel->tail = (channel->tail + 1U) % SCHEDULER_IPC_CAPACITY;
     ++channel->count;
     scheduler_ipc_record_enqueue_locked(destination);
+    if (destination->congestion_control_enabled &&
+        channel->count >= destination->congestion_high_watermark)
+        destination->congested = true;
     if (channel->readers.waiters != 0U)
         (void)wait_queue_wake_one_locked(&channel->readers);
     scheduler_ipc_service_report_locked(destination, true, interrupts_ticks());
@@ -1675,6 +1770,9 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     if (received) {
         ++service->messages_received;
         ++ipc_diag_messages_received;
+        if (service->congestion_control_enabled && service->congested &&
+            service->channel.count <= service->congestion_low_watermark)
+            service->congested = false;
         if (message->delivery_id != 0U) {
             service->received_delivery_ids[service->received_delivery_cursor] = message->delivery_id;
             service->received_delivery_cursor =
@@ -2229,6 +2327,47 @@ bool scheduler_ipc_timer_retry_dead_letter_self_test(void) {
     return diagnostics_ok && unregistered;
 }
 
+
+bool scheduler_ipc_adaptive_load_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, low = 0U, high = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("load.src", caps, &source) ||
+        !scheduler_ipc_service_register_ex("load.low", caps, &low) ||
+        !scheduler_ipc_service_register_ex("load.high", caps, &high)) return false;
+    if (!scheduler_ipc_service_set_priority(low, 1U) ||
+        !scheduler_ipc_service_set_priority(high, 4U) ||
+        scheduler_ipc_service_set_priority(high, 0U) ||
+        !scheduler_ipc_service_set_congestion_control(low, 2U, 0U) ||
+        scheduler_ipc_service_set_congestion_control(high, 5U, 2U)) return false;
+    scheduler_ipc_service_id_t candidates[2] = { high, low }, selected = 0U;
+    if (!scheduler_ipc_service_select_adaptive(candidates, 2U, &selected) ||
+        selected != high) return false;
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x4C4F4144);
+    message.length = 1U;
+    for (uint32_t i = 0U; i < 2U; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source, low, 100U + i, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    if (!scheduler_ipc_service_select_adaptive(candidates, 2U, &selected) ||
+        selected != high) return false;
+    if (scheduler_ipc_service_send_ex(source, low, 103U, &message) !=
+        SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(low, &info) || !info.congested ||
+        info.priority != 1U || info.queued_messages != 2U) return false;
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(low, &received) ||
+        !scheduler_ipc_service_receive(low, &received) ||
+        !scheduler_ipc_service_get_info(low, &info) || info.congested ||
+        !scheduler_ipc_service_select_adaptive(candidates, 2U, &selected)) return false;
+    const bool cleanup = scheduler_ipc_service_unregister(low) &&
+        scheduler_ipc_service_unregister(high) &&
+        scheduler_ipc_service_unregister(source) && scheduler_ipc_service_count() == 0U;
+    return cleanup;
+}
 
 bool scheduler_ipc_circuit_breaker_self_test(void) {
     if (scheduler_ipc_service_count() != 0U ||

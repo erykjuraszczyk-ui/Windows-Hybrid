@@ -25,6 +25,8 @@ typedef enum {
 #define SCHEDULER_IPC_DELIVERY_HISTORY 16U
 #define SCHEDULER_IPC_DEAD_LETTER_CAPACITY 8U
 #define SCHEDULER_IPC_DEFAULT_CIRCUIT_FAILURE_THRESHOLD 3U
+#define SCHEDULER_IPC_PRIORITY_MIN 1U
+#define SCHEDULER_IPC_PRIORITY_MAX 8U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
 #define SCHEDULER_IPC_PROTOCOL_VERSION 1U
 #define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
@@ -123,6 +125,8 @@ typedef struct {
     uint32_t queue_capacity;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
+    uint32_t priority;
+    bool congested;
     uint64_t messages_enqueued;
     uint64_t messages_received;
     uint64_t backpressure_events;
@@ -246,6 +250,14 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
                                     scheduler_ipc_service_info_t *info);
 bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_id,
                                              scheduler_ipc_queue_policy_t policy);
+bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority);
+bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
+                                                    uint32_t high_watermark,
+                                                    uint32_t low_watermark);
+bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
+                                           uint32_t candidate_count,
+                                           scheduler_ipc_service_id_t *selected_service_id);
+bool scheduler_ipc_adaptive_load_self_test(void);
 bool scheduler_ipc_service_set_circuit_breaker(scheduler_ipc_service_id_t service_id,
                                                 uint32_t failure_threshold,
                                                 uint64_t reset_timeout_ticks);

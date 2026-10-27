@@ -199,3 +199,15 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 - Test QEMU zapełnia kolejkę celu, wywołuje próg awarii, sprawdza odrzucenie w OPEN, opróżnia kolejkę i potwierdza odzyskanie po cooldownie oraz ACK po udanej sondzie.
 
 **Ograniczenia:** progi oraz cooldown są oparte na tickach PIT, a nie czasie rzeczywistym. Circuit breaker działa na ścieżce nieblokującego IPC, nie jest zabezpieczeniem SMP i nie gwarantuje exactly-once. Domyślnie jest wyłączony, aby nie zmieniać zachowania dotychczasowych klientów.
+
+
+## HYBRID OS v0.17.0 — IPC Adaptive Load Balancing, Service Priorities & Congestion Control
+
+**Status: implementacja na gałęzi funkcji; walidacja QEMU oczekuje na CI.**
+
+- Usługi otrzymują priorytet 1–8; wartość domyślna 1 zachowuje kompatybilność. Priorytet wpływa na ważony wynik zajętości kolejki.
+- `scheduler_ipc_service_select_adaptive()` wybiera najmniej obciążoną usługę z listy kandydatów, pomijając usługi zamknięte, przeciążone i z otwartym circuit breakerem. Remisy rozstrzygane są rotacyjnie.
+- `scheduler_ipc_service_set_congestion_control()` ustawia próg high/low watermark. Po osiągnięciu progu wysokiego usługa odrzuca nowe nieblokujące wysyłki jako BACKPRESSURE; stan przeciążenia znika dopiero po zejściu do progu niskiego.
+- QEMU self-test sprawdza priorytety, selekcję adaptacyjną, odrzucenie przy przeciążeniu i zwolnienie stanu po opróżnieniu kolejki.
+
+Ograniczenia: dobór celu odbywa się wyłącznie w podanej grupie usług; to nie jest globalny scheduler. Metryka bazuje na głębokości kolejki, nie na czasie CPU ani latencji end-to-end. Kernel pozostaje jednordzeniowym Ring 0.

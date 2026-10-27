@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.16.0 — IPC Retry Backoff, Circuit Breakers & Service Health Monitoring; **CI PASS po scaleniu** ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40522608835)).
+**Aktualny etap:** v0.17.0 — IPC Adaptive Load Balancing, Service Priorities & Congestion Control; implementacja na gałęzi funkcji, CI pending.
 
 ## Historia statusu
 
@@ -20,6 +20,7 @@
 - **v0.14.0 — CI PASS po scaleniu:** potwierdzenia dostarczenia, jawny ACK, ograniczone retry i tłumienie duplikatów ([QEMU regression](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40509463072)).
 - **v0.15.0 — CI PASS po scaleniu:** retry sterowane PIT, terminy dostaw i dead-letter queue.
 - **v0.16.0 — CI PASS po scaleniu:** wykładniczy backoff, circuit breakers i diagnostyka zdrowia usług ([QEMU regression](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40522608835)).
+- **v0.17.0 — walidacja oczekuje:** adaptacyjne wybieranie celu IPC, priorytety usług i histereza przeciążenia.
 - **v0.12.0 — CI PASS po scaleniu:** zamykanie usług, kończenie powiązanych wywołań i liczniki diagnostyczne.
 
 ## Potwierdzenie v0.5.0
