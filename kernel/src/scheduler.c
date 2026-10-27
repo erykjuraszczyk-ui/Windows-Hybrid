@@ -755,6 +755,7 @@ static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
     destination->status = source->status;
     destination->source_service_id = source->source_service_id;
     destination->request_id = source->request_id;
+    destination->delivery_id = source->delivery_id;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
         destination->payload[i] = source->payload[i];
 }
@@ -982,11 +983,20 @@ typedef struct {
     uint64_t messages_dropped_newest;
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
+    uint32_t received_delivery_ids[SCHEDULER_IPC_DELIVERY_HISTORY];
+    uint32_t received_delivery_cursor;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
     scheduler_ipc_channel_t channel;
 } scheduler_ipc_service_t;
 
+typedef struct {
+    bool valid;
+    scheduler_ipc_delivery_receipt_t receipt;
+    scheduler_ipc_message_t message;
+} scheduler_ipc_delivery_track_t;
+
 static scheduler_ipc_service_t ipc_services[SCHEDULER_IPC_MAX_SERVICES];
+static scheduler_ipc_delivery_track_t ipc_delivery_tracks[SCHEDULER_IPC_MAX_TRACKED_DELIVERIES];
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
 static uint64_t ipc_diag_messages_enqueued;
 static uint64_t ipc_diag_messages_received;
@@ -996,6 +1006,11 @@ static uint64_t ipc_diag_messages_dropped_oldest;
 static uint64_t ipc_diag_messages_rejected_full;
 static uint64_t ipc_diag_delivery_failures;
 static uint32_t ipc_diag_max_queue_depth;
+static uint64_t ipc_diag_deliveries_started;
+static uint64_t ipc_diag_deliveries_acknowledged;
+static uint64_t ipc_diag_delivery_retry_attempts;
+static uint64_t ipc_diag_delivery_retries_exhausted;
+static uint64_t ipc_diag_duplicate_deliveries_suppressed;
 
 
 static uint32_t scheduler_ipc_name_length(const char *name) {
@@ -1040,6 +1055,9 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->messages_dropped_newest = 0U;
     service->messages_dropped_oldest = 0U;
     service->messages_rejected_full = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_DELIVERY_HISTORY; ++i)
+        service->received_delivery_ids[i] = 0U;
+    service->received_delivery_cursor = 0U;
     service->channel.head = 0U;
     service->channel.tail = 0U;
     service->channel.count = 0U;
@@ -1152,6 +1170,9 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->messages_dropped_newest = 0U;
     free_slot->messages_dropped_oldest = 0U;
     free_slot->messages_rejected_full = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_DELIVERY_HISTORY; ++i)
+        free_slot->received_delivery_ids[i] = 0U;
+    free_slot->received_delivery_cursor = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         free_slot->name[i] = '\0';
     for (uint32_t i = 0U; i < name_length; ++i)
@@ -1304,6 +1325,40 @@ static bool scheduler_ipc_delivery_accepted(scheduler_ipc_delivery_result_t resu
            result == SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST;
 }
 
+static scheduler_ipc_delivery_track_t *scheduler_ipc_find_delivery_locked(uint32_t delivery_id) {
+    if (delivery_id == 0U) return NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_TRACKED_DELIVERIES; ++i)
+        if (ipc_delivery_tracks[i].valid &&
+            ipc_delivery_tracks[i].receipt.delivery_id == delivery_id)
+            return &ipc_delivery_tracks[i];
+    return NULL;
+}
+
+static bool scheduler_ipc_service_has_received_delivery_locked(
+    const scheduler_ipc_service_t *service, uint32_t delivery_id) {
+    if (service == NULL || delivery_id == 0U) return false;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_DELIVERY_HISTORY; ++i)
+        if (service->received_delivery_ids[i] == delivery_id) return true;
+    return false;
+}
+
+static bool scheduler_ipc_service_has_queued_delivery_locked(
+    const scheduler_ipc_service_t *service, uint32_t delivery_id) {
+    if (service == NULL || delivery_id == 0U ||
+        service->channel.count > SCHEDULER_IPC_CAPACITY) return false;
+    for (uint32_t i = 0U; i < service->channel.count; ++i) {
+        const uint32_t index = (service->channel.head + i) % SCHEDULER_IPC_CAPACITY;
+        if (service->channel.messages[index].delivery_id == delivery_id) return true;
+    }
+    return false;
+}
+
+static bool scheduler_ipc_delivery_already_seen_locked(
+    const scheduler_ipc_service_t *service, uint32_t delivery_id) {
+    return scheduler_ipc_service_has_queued_delivery_locked(service, delivery_id) ||
+           scheduler_ipc_service_has_received_delivery_locked(service, delivery_id);
+}
+
 scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     scheduler_ipc_service_id_t source_service_id,
     scheduler_ipc_service_id_t destination_service_id,
@@ -1436,12 +1491,262 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     if (received) {
         ++service->messages_received;
         ++ipc_diag_messages_received;
+        if (message->delivery_id != 0U) {
+            service->received_delivery_ids[service->received_delivery_cursor] = message->delivery_id;
+            service->received_delivery_cursor =
+                (service->received_delivery_cursor + 1U) % SCHEDULER_IPC_DELIVERY_HISTORY;
+        }
     }
     scheduler_ipc_service_release_ref_locked(service);
     scheduler_irq_restore(finish_flags);
     return received;
 }
 
+
+
+/* Bounded in-memory delivery tracking. ACK must follow receiver-side processing;
+ * receipts are not persistent across reboot. */
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t delivery_id, uint32_t request_id,
+    const scheduler_ipc_message_t *message, uint32_t max_attempts) {
+    if (source_service_id == 0U || destination_service_id == 0U ||
+        delivery_id == 0U || request_id == 0U || max_attempts == 0U ||
+        !scheduler_ipc_message_valid(message))
+        return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
+
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (scheduler_ipc_find_delivery_locked(delivery_id) != NULL) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
+    }
+    scheduler_ipc_delivery_track_t *slot = NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_TRACKED_DELIVERIES; ++i) {
+        scheduler_ipc_delivery_track_t *candidate = &ipc_delivery_tracks[i];
+        if (!candidate->valid ||
+            candidate->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
+            slot = candidate;
+            if (!candidate->valid) break;
+        }
+    }
+    if (slot == NULL) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_TRACKING_CAPACITY;
+    }
+    slot->valid = true;
+    slot->receipt.delivery_id = delivery_id;
+    slot->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_PENDING;
+    slot->receipt.attempts = 1U;
+    slot->receipt.max_attempts = max_attempts;
+    slot->receipt.source_service_id = source_service_id;
+    slot->receipt.destination_service_id = destination_service_id;
+    slot->receipt.request_id = request_id;
+    slot->receipt.last_result = SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
+    scheduler_ipc_message_copy(&slot->message, message);
+    slot->message.delivery_id = delivery_id;
+    ++ipc_diag_deliveries_started;
+    scheduler_irq_restore(flags);
+
+    const scheduler_ipc_delivery_result_t result = scheduler_ipc_service_send_ex(
+        source_service_id, destination_service_id, request_id, &slot->message);
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    scheduler_ipc_delivery_track_t *current = scheduler_ipc_find_delivery_locked(delivery_id);
+    if (current != NULL && current->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
+        current->receipt.last_result = result;
+        if (result == SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT ||
+            result == SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND ||
+            result == SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED ||
+            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR) {
+            current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
+        } else if (current->receipt.attempts >= current->receipt.max_attempts &&
+                   !scheduler_ipc_delivery_accepted(result) &&
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+            current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
+            current->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+            ++ipc_diag_delivery_retries_exhausted;
+        }
+    }
+    scheduler_irq_restore(finish_flags);
+    return result;
+}
+
+bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_service_id,
+                                        uint32_t delivery_id) {
+    if (destination_service_id == 0U || delivery_id == 0U) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_delivery_track_t *track = scheduler_ipc_find_delivery_locked(delivery_id);
+    scheduler_ipc_service_t *destination = scheduler_ipc_find_service_locked(destination_service_id);
+    if (track == NULL || destination == NULL ||
+        track->receipt.destination_service_id != destination_service_id ||
+        (track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING &&
+         track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED) ||
+        !scheduler_ipc_service_has_received_delivery_locked(destination, delivery_id)) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED;
+    track->receipt.last_result = SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED;
+    ++ipc_diag_deliveries_acknowledged;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_id) {
+    if (delivery_id == 0U) return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_delivery_track_t *track = scheduler_ipc_find_delivery_locked(delivery_id);
+    if (track == NULL) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
+    }
+    if (track->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_ALREADY_ACKNOWLEDGED;
+    }
+    if (track->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+    }
+    if (track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
+        scheduler_irq_restore(flags);
+        return track->receipt.last_result;
+    }
+    if (track->receipt.attempts >= track->receipt.max_attempts) {
+        track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
+        track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+        ++ipc_diag_delivery_retries_exhausted;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+    }
+    ++track->receipt.attempts;
+    ++ipc_diag_delivery_retry_attempts;
+    const scheduler_ipc_service_id_t destination_id = track->receipt.destination_service_id;
+    scheduler_ipc_service_t *destination = scheduler_ipc_find_service_locked(destination_id);
+    if (destination != NULL && scheduler_ipc_delivery_already_seen_locked(destination, delivery_id)) {
+        track->receipt.last_result = SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED;
+        ++ipc_diag_duplicate_deliveries_suppressed;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED;
+    }
+    scheduler_ipc_message_t message;
+    scheduler_ipc_message_copy(&message, &track->message);
+    const scheduler_ipc_service_id_t source_id = track->receipt.source_service_id;
+    const uint32_t request_id = track->receipt.request_id;
+    scheduler_irq_restore(flags);
+
+    const scheduler_ipc_delivery_result_t result = scheduler_ipc_service_send_ex(
+        source_id, destination_id, request_id, &message);
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    track = scheduler_ipc_find_delivery_locked(delivery_id);
+    if (track != NULL && track->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
+        track->receipt.last_result = result;
+        if (result == SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT ||
+            result == SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND ||
+            result == SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED ||
+            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR) {
+            track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
+        } else if (track->receipt.attempts >= track->receipt.max_attempts &&
+                   !scheduler_ipc_delivery_accepted(result) &&
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+            track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
+            track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+            ++ipc_diag_delivery_retries_exhausted;
+        }
+    }
+    scheduler_irq_restore(finish_flags);
+    if (result != SCHEDULER_IPC_DELIVERY_DELIVERED &&
+        result != SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST &&
+        result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+        scheduler_ipc_delivery_receipt_t final_receipt = {0};
+        if (scheduler_ipc_delivery_get_receipt(delivery_id, &final_receipt) &&
+            final_receipt.state == SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED)
+            return SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+    }
+    return result;
+}
+
+bool scheduler_ipc_delivery_get_receipt(uint32_t delivery_id,
+                                        scheduler_ipc_delivery_receipt_t *receipt) {
+    if (delivery_id == 0U || receipt == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_delivery_track_t *track = scheduler_ipc_find_delivery_locked(delivery_id);
+    if (track == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    *receipt = track->receipt;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+uint32_t scheduler_ipc_delivery_pending_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    uint32_t count = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_TRACKED_DELIVERIES; ++i)
+        if (ipc_delivery_tracks[i].valid &&
+            ipc_delivery_tracks[i].receipt.state == SCHEDULER_IPC_DELIVERY_STATE_PENDING)
+            ++count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
+bool scheduler_ipc_receipt_retry_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U ||
+        scheduler_ipc_delivery_pending_count() != 0U) return false;
+    scheduler_ipc_service_id_t source_id = 0U, destination_id = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("receipt.src", caps, &source_id) ||
+        !scheduler_ipc_service_register_ex("receipt.dst", caps, &destination_id))
+        return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x41434B31);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0x5A);
+    const uint32_t delivery_id = UINT32_C(0x14000101);
+    if (scheduler_ipc_service_send_reliable(source_id, destination_id, delivery_id,
+            41U, &message, 5U) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    scheduler_ipc_delivery_receipt_t receipt = {0};
+    if (!scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING ||
+        receipt.attempts != 1U || receipt.max_attempts != 5U) return false;
+    if (scheduler_ipc_delivery_retry(delivery_id) !=
+        SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) return false;
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(destination_id, &received) ||
+        received.delivery_id != delivery_id || received.request_id != 41U ||
+        received.payload[0] != UINT8_C(0x5A)) return false;
+    if (scheduler_ipc_delivery_retry(delivery_id) !=
+        SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) return false;
+    if (!scheduler_ipc_service_ack_delivery(destination_id, delivery_id) ||
+        !scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED ||
+        scheduler_ipc_delivery_retry(delivery_id) !=
+            SCHEDULER_IPC_DELIVERY_ALREADY_ACKNOWLEDGED) return false;
+
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t queued = {0};
+        queued.type = UINT32_C(0x51554555);
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 700U + i,
+                &queued) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    const uint32_t exhausted_id = UINT32_C(0x14000102);
+    if (scheduler_ipc_service_send_reliable(source_id, destination_id, exhausted_id,
+            42U, &message, 2U) != SCHEDULER_IPC_DELIVERY_BACKPRESSURE ||
+        scheduler_ipc_delivery_retry(exhausted_id) !=
+            SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED ||
+        scheduler_ipc_delivery_retry(exhausted_id) !=
+            SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED ||
+        !scheduler_ipc_delivery_get_receipt(exhausted_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED ||
+        receipt.attempts != 2U) return false;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i)
+        if (!scheduler_ipc_service_receive(destination_id, &received)) return false;
+    if (scheduler_ipc_delivery_pending_count() != 0U) return false;
+    return scheduler_ipc_service_unregister(destination_id) &&
+           scheduler_ipc_service_unregister(source_id);
+}
 
  scheduler_ipc_delivery_result_t scheduler_ipc_service_send_request_ex(
     scheduler_ipc_service_id_t source_service_id,
@@ -1828,11 +2133,21 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->messages_dropped_oldest = ipc_diag_messages_dropped_oldest;
     diagnostics->messages_rejected_full = ipc_diag_messages_rejected_full;
     diagnostics->delivery_failures = ipc_diag_delivery_failures;
+    diagnostics->deliveries_started = ipc_diag_deliveries_started;
+    diagnostics->deliveries_acknowledged = ipc_diag_deliveries_acknowledged;
+    diagnostics->delivery_retry_attempts = ipc_diag_delivery_retry_attempts;
+    diagnostics->delivery_retries_exhausted = ipc_diag_delivery_retries_exhausted;
+    diagnostics->duplicate_deliveries_suppressed = ipc_diag_duplicate_deliveries_suppressed;
+    diagnostics->pending_deliveries = 0U;
     diagnostics->max_queue_depth = ipc_diag_max_queue_depth;
     diagnostics->pending_calls = 0U;
     diagnostics->active_services = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i)
         if (ipc_pending_calls[i].active) ++diagnostics->pending_calls;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_TRACKED_DELIVERIES; ++i)
+        if (ipc_delivery_tracks[i].valid &&
+            ipc_delivery_tracks[i].receipt.state == SCHEDULER_IPC_DELIVERY_STATE_PENDING)
+            ++diagnostics->pending_deliveries;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i)
         if (ipc_services[i].active && !ipc_services[i].closing)
             ++diagnostics->active_services;

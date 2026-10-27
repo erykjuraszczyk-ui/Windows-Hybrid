@@ -159,3 +159,17 @@ Ograniczenia: jednordzeniowy Ring 0; wyłączenie przerwań nie zapewnia synchro
 **Kontrakt dostarczenia:** `DELIVERED` oznacza, że wiadomość została atomowo przyjęta do kolejki. Nie stanowi potwierdzenia odebrania, przetworzenia ani trwałego zapisu; polityki DROP jawnie pozwalają na utratę wiadomości.
 
 Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Pojemność kanału nadal jest stała na poziomie czterech wiadomości.
+
+
+## HYBRID OS v0.14.0 — IPC Delivery Receipts, Acknowledgements & Retry Core
+
+**Status: CI validation pending.** Nie oznaczaj tej wersji jako PASS, dopóki przebieg GitHub Actions nie zbuduje ISO i nie potwierdzi markera QEMU.
+
+- `scheduler_ipc_service_send_reliable()` rozpoczyna śledzoną dostawę z niezerowym `delivery_id` oraz limitem prób.
+- `scheduler_ipc_delivery_get_receipt()` udostępnia stan, numer próby, limit, endpointy, request ID i ostatni wynik.
+- `scheduler_ipc_service_ack_delivery()` przyjmuje ACK dopiero po odczytaniu wiadomości przez wskazaną usługę.
+- `scheduler_ipc_delivery_retry()` wykonuje pojedynczą próbę na żądanie; ponowna próba zostaje stłumiona, jeśli ta sama dostawa jest już w kolejce lub znajduje się w ograniczonej historii odbiorcy.
+- Po osiągnięciu `max_attempts` stan przechodzi do `EXHAUSTED`. Stała tablica utrzymuje maksymalnie 8 śledzonych dostaw; wpisy terminalne mogą zostać zastąpione przez nową dostawę.
+- Test QEMU pokrywa dostarczenie, ACK, suppress duplikatu, przepełnienie kolejki i wyczerpanie limitu prób.
+
+**Granice:** to niezawodność in-memory dla bieżącego jednordzeniowego kernela Ring 0. Retry uruchamia klient przez wywołanie API, nie timer ani automatyczna pętla. ACK jest obecnie prymitywem kernelowym, nie osobną wiadomością routowaną. Brak trwałości po restarcie, gwarancji exactly-once end-to-end i ochrony przed zawieszeniem/awarią odbiorcy po wykonaniu efektu ubocznego, a przed ACK.

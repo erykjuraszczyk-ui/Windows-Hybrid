@@ -21,6 +21,8 @@ typedef enum {
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
+#define SCHEDULER_IPC_MAX_TRACKED_DELIVERIES 8U
+#define SCHEDULER_IPC_DELIVERY_HISTORY 16U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
 #define SCHEDULER_IPC_PROTOCOL_VERSION 1U
 #define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
@@ -33,7 +35,8 @@ typedef enum {
     SCHEDULER_IPC_KIND_REQUEST = 1U,
     SCHEDULER_IPC_KIND_RESPONSE = 2U,
     SCHEDULER_IPC_KIND_ERROR = 3U,
-    SCHEDULER_IPC_KIND_EVENT = 4U
+    SCHEDULER_IPC_KIND_EVENT = 4U,
+    SCHEDULER_IPC_KIND_ACK = 5U
 } scheduler_ipc_message_kind_t;
 typedef enum {
     SCHEDULER_IPC_STATUS_OK = 0U,
@@ -57,8 +60,30 @@ typedef enum {
     SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND = 4U,
     SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED = 5U,
     SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT = 6U,
-    SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR = 7U
+    SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR = 7U,
+    SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED = 8U,
+    SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED = 9U,
+    SCHEDULER_IPC_DELIVERY_ALREADY_ACKNOWLEDGED = 10U,
+    SCHEDULER_IPC_DELIVERY_TRACKING_CAPACITY = 11U,
+    SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED = 12U
 } scheduler_ipc_delivery_result_t;
+typedef enum {
+    SCHEDULER_IPC_DELIVERY_STATE_FREE = 0U,
+    SCHEDULER_IPC_DELIVERY_STATE_PENDING = 1U,
+    SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED = 2U,
+    SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED = 3U,
+    SCHEDULER_IPC_DELIVERY_STATE_FAILED = 4U
+} scheduler_ipc_delivery_state_t;
+typedef struct {
+    uint32_t delivery_id;
+    scheduler_ipc_delivery_state_t state;
+    uint32_t attempts;
+    uint32_t max_attempts;
+    scheduler_ipc_service_id_t source_service_id;
+    scheduler_ipc_service_id_t destination_service_id;
+    uint32_t request_id;
+    scheduler_ipc_delivery_result_t last_result;
+} scheduler_ipc_delivery_receipt_t;
 typedef struct {
     scheduler_ipc_service_id_t id;
     uint32_t capabilities;
@@ -82,6 +107,7 @@ typedef struct {
     scheduler_ipc_status_t status;
     scheduler_ipc_service_id_t source_service_id;
     uint32_t request_id;
+    uint32_t delivery_id;
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
 typedef struct {
@@ -100,6 +126,12 @@ typedef struct {
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
     uint64_t delivery_failures;
+    uint64_t deliveries_started;
+    uint64_t deliveries_acknowledged;
+    uint64_t delivery_retry_attempts;
+    uint64_t delivery_retries_exhausted;
+    uint64_t duplicate_deliveries_suppressed;
+    uint32_t pending_deliveries;
     uint32_t max_queue_depth;
     uint32_t pending_calls;
     uint32_t active_services;
@@ -187,6 +219,18 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_request_ex(
     scheduler_ipc_service_id_t destination_service_id,
     uint32_t request_id,
     const scheduler_ipc_message_t *request);
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t delivery_id, uint32_t request_id,
+    const scheduler_ipc_message_t *message, uint32_t max_attempts);
+bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_service_id,
+                                        uint32_t delivery_id);
+scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_id);
+bool scheduler_ipc_delivery_get_receipt(uint32_t delivery_id,
+                                        scheduler_ipc_delivery_receipt_t *receipt);
+uint32_t scheduler_ipc_delivery_pending_count(void);
+bool scheduler_ipc_receipt_retry_self_test(void);
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
                                  const scheduler_ipc_message_t *request,
                                  const scheduler_ipc_message_t *response,
