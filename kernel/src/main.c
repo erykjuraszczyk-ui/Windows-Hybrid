@@ -338,6 +338,23 @@ void kmain(void) {
     serial_write("HYBRID: IPC_RUNTIME_SELFTEST_OK pending=");
     serial_write_hex64(scheduler_ipc_pending_call_count());
     serial_write("\n");
+    if (!scheduler_ipc_lifecycle_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_LIFECYCLE\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_LIFECYCLE_SELFTEST_OK\n");
+    scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
+    scheduler_ipc_get_diagnostics(&ipc_diagnostics);
+    if (ipc_diagnostics.pending_calls != 0U ||
+        ipc_diagnostics.active_services != 0U) {
+        serial_write("HYBRID: FAIL_IPC_DIAGNOSTICS\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_DIAGNOSTICS_OK pending=");
+    serial_write_hex64(ipc_diagnostics.pending_calls);
+    serial_write(" services=");
+    serial_write_hex64(ipc_diagnostics.active_services);
+    serial_write("\n");
     serial_write("HYBRID: BOOT_OK\n");
     cpu_halt();
 }

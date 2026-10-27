@@ -131,3 +131,16 @@ Wymagane markery: `HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK` i `HYBRID: BOOT_OK`
 Required markers: `HYBRID: IPC_RUNTIME_SELFTEST_OK` and `HYBRID: BOOT_OK`. Status must remain pending until the latest source revision passes the QEMU smoke test.
 
 Limitations: single-core Ring 0 prototype; no SMP safety, Ring 3 isolation, server-level authentication, call priorities or retry policy. The expiration history is bounded; this is an internal runtime primitive, not a distributed RPC guarantee.
+
+
+## HYBRID OS v0.12.0 — IPC Reliability & Service Lifecycle Core
+
+**Status: CI validation pending.**
+
+- Usługa przechodzi w stan `closing`: nie przyjmuje nowych operacji i znika z discovery, ale istniejące referencje chronią jej slot do zakończenia aktywnego użycia.
+- Wyrejestrowanie odrzuca zakolejkowane wiadomości, wybudza zadania zablokowane na kanale i kończy aktywne wywołania request/response typowanym błędem `SCHEDULER_IPC_STATUS_NOT_FOUND`.
+- Slot usługi jest zwalniany dopiero po wyzerowaniu referencji aktywnych operacji; ID usługi nie jest ponownie używane.
+- `scheduler_ipc_get_diagnostics()` udostępnia liczniki wywołań, timeoutów, anulowań, brakujących usług, błędów wysyłki, odrzuconych odpowiedzi oraz zamknięć usług.
+- QEMU self-test zamyka serwer po odebraniu żądania, weryfikuje przebudzenie klienta z `ERROR/NOT_FOUND` oraz brak pozostałych pending calls i usług.
+
+Ograniczenia: jednordzeniowy Ring 0; wyłączenie przerwań nie zapewnia synchronizacji SMP. Zamknięcie jest logicznie natychmiastowe, ale slot odzyskiwany jest po zwolnieniu ostatniej referencji. Brak izolacji procesów i autoryzacji usług.

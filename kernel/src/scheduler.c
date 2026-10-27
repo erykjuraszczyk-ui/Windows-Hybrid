@@ -42,6 +42,14 @@ typedef struct {
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
 static scheduler_ipc_pending_call_t ipc_pending_calls[SCHEDULER_IPC_MAX_PENDING_CALLS];
+static uint64_t ipc_diag_calls_started;
+static uint64_t ipc_diag_calls_completed;
+static uint64_t ipc_diag_calls_timed_out;
+static uint64_t ipc_diag_calls_cancelled;
+static uint64_t ipc_diag_calls_service_unavailable;
+static uint64_t ipc_diag_calls_send_failed;
+static uint64_t ipc_diag_replies_dropped;
+static uint64_t ipc_diag_services_closed;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
 static uint32_t ipc_expired_history_cursor;
@@ -414,6 +422,7 @@ static void scheduler_ipc_pending_expire_task_locked(uint32_t task_index) {
             pending->expired || pending->owner_task_index != task_index ||
             !pending->waiting) continue;
         pending->expired = true;
+        ++ipc_diag_calls_timed_out;
         scheduler_ipc_expired_record_locked(pending->source_service_id,
             pending->destination_service_id, pending->request_id);
     }
@@ -961,6 +970,7 @@ bool scheduler_semaphore_ipc_self_test(void) {
 
 typedef struct {
     bool active;
+    bool closing;
     scheduler_ipc_service_id_t id;
     uint32_t capabilities;
     uint32_t active_calls;
@@ -970,6 +980,7 @@ typedef struct {
 
 static scheduler_ipc_service_t ipc_services[SCHEDULER_IPC_MAX_SERVICES];
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
+
 
 static uint32_t scheduler_ipc_name_length(const char *name) {
     if (name == NULL) return 0U;
@@ -996,6 +1007,45 @@ static scheduler_ipc_service_t *scheduler_ipc_find_service_locked(
     return NULL;
 }
 
+static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL || !service->active || !service->closing ||
+        service->active_calls != 0U || service->channel.readers.waiters != 0U ||
+        service->channel.writers.waiters != 0U) return;
+    service->active = false;
+    service->closing = false;
+    service->id = 0U;
+    service->capabilities = 0U;
+    service->active_calls = 0U;
+    service->channel.head = 0U;
+    service->channel.tail = 0U;
+    service->channel.count = 0U;
+    service->channel.readers.waiters = 0U;
+    service->channel.writers.waiters = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
+        service->name[i] = '\0';
+}
+
+static void scheduler_ipc_service_release_ref_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL) return;
+    if (service->active_calls > 0U) --service->active_calls;
+    scheduler_ipc_service_finalize_locked(service);
+}
+
+static void scheduler_ipc_service_cancel_waiters_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL) return;
+    for (uint32_t i = 0U; i < SCHEDULER_MAX_TASKS; ++i) {
+        scheduler_task_t *task = &task_table[i];
+        if (task->state != SCHEDULER_TASK_BLOCKED ||
+            (task->waiting_on != &service->channel.readers &&
+             task->waiting_on != &service->channel.writers)) continue;
+        scheduler_remove_waiter_locked(i);
+        task->has_deadline = false;
+        task->wait_deadline = 0U;
+        task->wait_result = SCHEDULER_WAIT_CANCELLED;
+        task->state = SCHEDULER_TASK_READY;
+    }
+}
+
 static void scheduler_ipc_pending_release_locked(uint32_t index) {
     if (index >= SCHEDULER_IPC_MAX_PENDING_CALLS) return;
     scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[index];
@@ -1008,8 +1058,8 @@ static void scheduler_ipc_pending_release_locked(uint32_t index) {
         scheduler_ipc_find_service_locked(pending->source_service_id);
     scheduler_ipc_service_t *destination =
         scheduler_ipc_find_service_locked(pending->destination_service_id);
-    if (source != NULL && source->active_calls > 0U) --source->active_calls;
-    if (destination != NULL && destination->active_calls > 0U) --destination->active_calls;
+    if (source != NULL) scheduler_ipc_service_release_ref_locked(source);
+    if (destination != NULL) scheduler_ipc_service_release_ref_locked(destination);
     pending->active = false;
     pending->completed = false;
     pending->expired = false;
@@ -1030,6 +1080,7 @@ static void scheduler_ipc_pending_owner_cancel_locked(uint32_t owner_index) {
         if (!pending->active || pending->owner_task_index != owner_index) continue;
         pending->cancelled = true;
         pending->expired = true;
+        ++ipc_diag_calls_cancelled;
         scheduler_ipc_expired_record_locked(pending->source_service_id,
             pending->destination_service_id, pending->request_id);
         scheduler_ipc_pending_release_locked(i);
@@ -1057,13 +1108,15 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
             scheduler_irq_restore(flags);
             return false;
         }
-        if (!service->active && free_slot == NULL) free_slot = service;
+        if (!service->active && service->active_calls == 0U && free_slot == NULL)
+            free_slot = service;
     }
     if (free_slot == NULL || next_ipc_service_id == 0U) {
         scheduler_irq_restore(flags);
         return false;
     }
     free_slot->active = false;
+    free_slot->closing = false;
     free_slot->id = next_ipc_service_id++;
     free_slot->capabilities = capabilities;
     free_slot->active_calls = 0U;
@@ -1084,7 +1137,8 @@ bool scheduler_ipc_service_lookup(const char *name,
     const uint64_t flags = scheduler_irq_save_disable();
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
         scheduler_ipc_service_t *service = &ipc_services[i];
-        if (service->active && scheduler_ipc_name_equal(service->name, name)) {
+        if (service->active && !service->closing &&
+            scheduler_ipc_name_equal(service->name, name)) {
             *service_id = service->id;
             scheduler_irq_restore(flags);
             return true;
@@ -1111,7 +1165,7 @@ bool scheduler_ipc_service_enumerate(uint32_t active_index,
     const uint64_t flags = scheduler_irq_save_disable();
     uint32_t current = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i) {
-        if (!ipc_services[i].active) continue;
+        if (!ipc_services[i].active || ipc_services[i].closing) continue;
         if (current++ != active_index) continue;
         scheduler_ipc_service_info_copy_locked(&ipc_services[i], info);
         scheduler_irq_restore(flags);
@@ -1126,7 +1180,7 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
     if (info == NULL) return false;
     const uint64_t flags = scheduler_irq_save_disable();
     scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
-    if (service == NULL) {
+    if (service == NULL || service->closing) {
         scheduler_irq_restore(flags);
         return false;
     }
@@ -1136,21 +1190,47 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
 }
 
 bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id) {
+    if (service_id == 0U) return false;
     const uint64_t flags = scheduler_irq_save_disable();
     scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
-    if (service == NULL || service->active_calls != 0U ||
-        service->channel.count != 0U ||
-        service->channel.readers.waiters != 0U ||
-        service->channel.writers.waiters != 0U) {
+    if (service == NULL) {
         scheduler_irq_restore(flags);
         return false;
     }
-    service->active = false;
-    service->id = 0U;
-    service->active_calls = 0U;
-    for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
-        service->name[i] = '\0';
+    if (!service->closing) {
+        service->closing = true;
+        ++ipc_diag_services_closed;
+        service->channel.head = 0U;
+        service->channel.tail = 0U;
+        service->channel.count = 0U;
+        scheduler_ipc_service_cancel_waiters_locked(service);
+
+        /* Complete in-flight calls touching this endpoint with a typed NOT_FOUND. */
+        for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+            scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[i];
+            if (!pending->active || pending->completed || pending->expired ||
+                pending->cancelled ||
+                (pending->source_service_id != service_id &&
+                 pending->destination_service_id != service_id)) continue;
+            pending->response = (scheduler_ipc_message_t){0};
+            pending->response.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+            pending->response.kind = SCHEDULER_IPC_KIND_ERROR;
+            pending->response.status = SCHEDULER_IPC_STATUS_NOT_FOUND;
+            pending->response.source_service_id = pending->destination_service_id;
+            pending->response.request_id = pending->request_id;
+            pending->completed = true;
+            ++ipc_diag_calls_service_unavailable;
+            if (pending->waiting && pending->owner_task_index < SCHEDULER_MAX_TASKS) {
+                scheduler_task_t *owner = &task_table[pending->owner_task_index];
+                if (owner->state == SCHEDULER_TASK_BLOCKED &&
+                    owner->waiting_on == &pending->waiters)
+                    (void)wait_queue_wake_one_locked(&pending->waiters);
+            }
+        }
+    }
+    scheduler_ipc_service_finalize_locked(service);
     scheduler_irq_restore(flags);
+    /* True means closure was accepted; existing users release the slot as they unwind. */
     return true;
 }
 
@@ -1164,8 +1244,8 @@ bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
         scheduler_ipc_find_service_locked(source_service_id);
     scheduler_ipc_service_t *destination =
         scheduler_ipc_find_service_locked(destination_service_id);
-    if (source == NULL || destination == NULL ||
-        source->active_calls == UINT32_MAX ||
+    if (source == NULL || destination == NULL || source->closing ||
+        destination->closing || source->active_calls == UINT32_MAX ||
         destination->active_calls == UINT32_MAX) {
         scheduler_irq_restore(flags);
         return false;
@@ -1182,8 +1262,8 @@ bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
     const bool sent = scheduler_ipc_send(channel, &forwarded);
 
     const uint64_t finish_flags = scheduler_irq_save_disable();
-    --source->active_calls;
-    --destination->active_calls;
+    scheduler_ipc_service_release_ref_locked(source);
+    scheduler_ipc_service_release_ref_locked(destination);
     scheduler_irq_restore(finish_flags);
     return sent;
 }
@@ -1193,7 +1273,7 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     if (message == NULL) return false;
     const uint64_t flags = scheduler_irq_save_disable();
     scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
-    if (service == NULL || service->active_calls == UINT32_MAX) {
+    if (service == NULL || service->closing || service->active_calls == UINT32_MAX) {
         scheduler_irq_restore(flags);
         return false;
     }
@@ -1204,7 +1284,7 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     const bool received = scheduler_ipc_receive(channel, message);
 
     const uint64_t finish_flags = scheduler_irq_save_disable();
-    --service->active_calls;
+    scheduler_ipc_service_release_ref_locked(service);
     scheduler_irq_restore(finish_flags);
     return received;
 }
@@ -1220,6 +1300,7 @@ bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_servic
     scheduler_ipc_service_t *destination =
         scheduler_ipc_find_service_locked(destination_service_id);
     const bool allowed = source != NULL && destination != NULL &&
+        !source->closing && !destination->closing &&
         (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
         (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
     scheduler_irq_restore(flags);
@@ -1252,6 +1333,7 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
     scheduler_ipc_service_t *requester =
         scheduler_ipc_find_service_locked(request->source_service_id);
     const bool allowed = responder != NULL && requester != NULL &&
+        !responder->closing && !requester->closing &&
         (responder->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
         (requester->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
     if (!allowed) {
@@ -1276,6 +1358,7 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
     if (pending_index != SCHEDULER_NO_TASK) {
         scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[pending_index];
         if (pending->completed || pending->expired || pending->cancelled) {
+            ++ipc_diag_replies_dropped;
             scheduler_ipc_expired_record_locked(pending->source_service_id,
                 pending->destination_service_id, pending->request_id);
             scheduler_irq_restore(flags);
@@ -1312,6 +1395,7 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
         routed.request_id = request->request_id;
         pending->response = routed;
         pending->completed = true;
+        ++ipc_diag_calls_completed;
         if (pending->waiting && owner->state == SCHEDULER_TASK_BLOCKED &&
             owner->waiting_on == &pending->waiters)
             (void)wait_queue_wake_one_locked(&pending->waiters);
@@ -1323,6 +1407,7 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
        ordinary receive queue while that endpoint has active pending calls. */
     if (active_pair || scheduler_ipc_expired_match_locked(request->source_service_id,
             responder_service_id, request->request_id)) {
+        ++ipc_diag_replies_dropped;
         scheduler_irq_restore(flags);
         return false;
     }
@@ -1379,7 +1464,7 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
     scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
     scheduler_ipc_service_t *destination =
         scheduler_ipc_find_service_locked(destination_service_id);
-    if (source == NULL || destination == NULL ||
+    if (source == NULL || destination == NULL || source->closing || destination->closing ||
         (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) == 0U ||
         (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) == 0U ||
         source->active_calls > UINT32_MAX - (source == destination ? 2U : 1U) ||
@@ -1410,6 +1495,7 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
     pending->response = (scheduler_ipc_message_t){0};
     ++source->active_calls;
     ++destination->active_calls;
+    ++ipc_diag_calls_started;
     *request_id_out = request_id;
     scheduler_irq_restore(flags);
 
@@ -1421,6 +1507,7 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
     if (!scheduler_ipc_service_send_request(source_service_id, destination_service_id,
                                             request_id, &outgoing)) {
         const uint64_t cleanup_flags = scheduler_irq_save_disable();
+        ++ipc_diag_calls_send_failed;
         scheduler_ipc_pending_release_locked(pending_index);
         scheduler_irq_restore(cleanup_flags);
         return false;
@@ -1501,6 +1588,7 @@ bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
         }
         pending->cancelled = true;
         pending->expired = true;
+        ++ipc_diag_calls_cancelled;
         scheduler_ipc_expired_record_locked(pending->source_service_id,
             pending->destination_service_id, pending->request_id);
         if (pending->owner_task_index < SCHEDULER_MAX_TASKS) {
@@ -1534,11 +1622,32 @@ uint32_t scheduler_ipc_pending_call_count(void) {
     return count;
 }
 
+void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
+    if (diagnostics == NULL) return;
+    const uint64_t flags = scheduler_irq_save_disable();
+    diagnostics->calls_started = ipc_diag_calls_started;
+    diagnostics->calls_completed = ipc_diag_calls_completed;
+    diagnostics->calls_timed_out = ipc_diag_calls_timed_out;
+    diagnostics->calls_cancelled = ipc_diag_calls_cancelled;
+    diagnostics->calls_service_unavailable = ipc_diag_calls_service_unavailable;
+    diagnostics->calls_send_failed = ipc_diag_calls_send_failed;
+    diagnostics->replies_dropped = ipc_diag_replies_dropped;
+    diagnostics->services_closed = ipc_diag_services_closed;
+    diagnostics->pending_calls = 0U;
+    diagnostics->active_services = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i)
+        if (ipc_pending_calls[i].active) ++diagnostics->pending_calls;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i)
+        if (ipc_services[i].active && !ipc_services[i].closing)
+            ++diagnostics->active_services;
+    scheduler_irq_restore(flags);
+}
+
 uint32_t scheduler_ipc_service_count(void) {
     const uint64_t flags = scheduler_irq_save_disable();
     uint32_t count = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_SERVICES; ++i)
-        if (ipc_services[i].active) ++count;
+        if (ipc_services[i].active && !ipc_services[i].closing) ++count;
     scheduler_irq_restore(flags);
     return count;
 }
@@ -1736,13 +1845,11 @@ bool scheduler_ipc_service_self_test(void) {
           ipc_service_test_sink_id, 7U,
           &(scheduler_ipc_message_t){.type = 9U, .length = 0U}))
         return false;
-    if (scheduler_ipc_service_unregister(ipc_service_test_sink_id)) return false;
+    /* v0.12.0 unregister actively closes the endpoint and drops queued work. */
+    if (!scheduler_ipc_service_unregister(ipc_service_test_sink_id)) return false;
     scheduler_ipc_message_t sink_message = {0};
-    if (!scheduler_ipc_service_receive(ipc_service_test_sink_id, &sink_message) ||
-        sink_message.source_service_id != ipc_service_test_client_id ||
-        sink_message.request_id != 7U ||
-        sink_message.kind != SCHEDULER_IPC_KIND_DATA ||
-        !scheduler_ipc_service_unregister(ipc_service_test_sink_id) ||
+    if (scheduler_ipc_service_receive(ipc_service_test_sink_id, &sink_message) ||
+        scheduler_ipc_service_unregister(ipc_service_test_sink_id) ||
         !scheduler_ipc_service_unregister(ipc_service_test_server_id) ||
         !scheduler_ipc_service_unregister(ipc_service_test_client_id) ||
         scheduler_ipc_service_count() != 0U)
@@ -2027,6 +2134,119 @@ bool scheduler_ipc_runtime_self_test(void) {
         scheduler_ipc_service_unregister(ipc_runtime_timeout_id) &&
         scheduler_ipc_service_unregister(ipc_runtime_cancel_id);
     return unregistered && scheduler_ipc_service_count() == 0U;
+}
+
+
+static scheduler_ipc_service_id_t ipc_lifecycle_client_id;
+static scheduler_ipc_service_id_t ipc_lifecycle_server_id;
+static volatile uint32_t ipc_lifecycle_server_received;
+static volatile uint32_t ipc_lifecycle_client_ok;
+static volatile uint32_t ipc_lifecycle_unregister_ok;
+static volatile uint32_t ipc_lifecycle_errors;
+
+static void ipc_lifecycle_client(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    volatile uint32_t request_id = 0U;
+    request.type = UINT32_C(0x4C494645);
+    request.length = 1U;
+    request.payload[0] = UINT8_C(0x12);
+    const bool called = scheduler_ipc_service_call(ipc_lifecycle_client_id,
+        ipc_lifecycle_server_id, &request, 24U, &response, &request_id);
+    ipc_lifecycle_client_ok = called &&
+        response.kind == SCHEDULER_IPC_KIND_ERROR &&
+        response.status == SCHEDULER_IPC_STATUS_NOT_FOUND &&
+        response.source_service_id == ipc_lifecycle_server_id &&
+        response.request_id == request_id;
+    if (!ipc_lifecycle_client_ok) ++ipc_lifecycle_errors;
+}
+
+static void ipc_lifecycle_server(void) {
+    scheduler_ipc_message_t request = {0};
+    if (scheduler_ipc_service_receive(ipc_lifecycle_server_id, &request) &&
+        request.kind == SCHEDULER_IPC_KIND_REQUEST &&
+        request.source_service_id == ipc_lifecycle_client_id &&
+        request.request_id != 0U) {
+        ipc_lifecycle_server_received = 1U;
+    } else {
+        ++ipc_lifecycle_errors;
+    }
+}
+
+static void ipc_lifecycle_controller(void) {
+    uint64_t guard = 0U;
+    while (ipc_lifecycle_server_received == 0U && guard++ < UINT64_C(1000000))
+        __asm__ volatile ("pause");
+    if (ipc_lifecycle_server_received == 0U) {
+        ++ipc_lifecycle_errors;
+        return;
+    }
+    ipc_lifecycle_unregister_ok =
+        scheduler_ipc_service_unregister(ipc_lifecycle_server_id) ? 1U : 0U;
+    if (!ipc_lifecycle_unregister_ok) ++ipc_lifecycle_errors;
+}
+
+bool scheduler_ipc_lifecycle_self_test(void) {
+    scheduler_init();
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_diagnostics_t before = {0};
+    scheduler_ipc_get_diagnostics(&before);
+    ipc_lifecycle_server_received = 0U;
+    ipc_lifecycle_client_ok = 0U;
+    ipc_lifecycle_unregister_ok = 0U;
+    ipc_lifecycle_errors = 0U;
+
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY |
+                          SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE;
+    if (!scheduler_ipc_service_register_ex("life.client", caps, &ipc_lifecycle_client_id) ||
+        !scheduler_ipc_service_register_ex("life.server", caps, &ipc_lifecycle_server_id))
+        return false;
+
+    scheduler_task_id_t client = 0U, server = 0U, controller = 0U;
+    if (!scheduler_task_create(ipc_lifecycle_client, &client) ||
+        !scheduler_task_create(ipc_lifecycle_server, &server) ||
+        !scheduler_task_create(ipc_lifecycle_controller, &controller))
+        return false;
+
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    preemptive_tick_limit = 40U;
+    const uint64_t target = interrupts_ticks() + 40U;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+
+    scheduler_ipc_diagnostics_t after = {0};
+    scheduler_ipc_get_diagnostics(&after);
+    const bool tasks_ok = waited && !preemptive_active && bootstrap_frame == NULL &&
+        scheduler_task_state(client) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(server) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(controller) == SCHEDULER_TASK_EXITED;
+    const bool result_ok = ipc_lifecycle_server_received == 1U &&
+        ipc_lifecycle_unregister_ok == 1U && ipc_lifecycle_client_ok == 1U &&
+        ipc_lifecycle_errors == 0U && after.pending_calls == 0U &&
+        after.calls_service_unavailable == before.calls_service_unavailable + 1U &&
+        scheduler_ipc_service_count() == 1U;
+    const bool reaped = tasks_ok && result_ok &&
+        scheduler_task_reap(client) && scheduler_task_reap(server) &&
+        scheduler_task_reap(controller);
+    if (!tasks_ok || !result_ok || !reaped) {
+        serial_write("HYBRID: IPC_LIFECYCLE_DIAG tasks=");
+        serial_write_hex64(scheduler_task_state(client)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(server)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(controller));
+        serial_write(" result="); serial_write_hex64(ipc_lifecycle_client_ok);
+        serial_write(","); serial_write_hex64(ipc_lifecycle_unregister_ok);
+        serial_write(" pending="); serial_write_hex64(after.pending_calls);
+        serial_write(" unavailable="); serial_write_hex64(after.calls_service_unavailable);
+        serial_write(" errors="); serial_write_hex64(ipc_lifecycle_errors);
+        serial_write("\n");
+    }
+    if (!reaped) return false;
+    const bool cleanup = scheduler_ipc_service_unregister(ipc_lifecycle_client_id);
+    return cleanup && scheduler_ipc_service_count() == 0U;
 }
 
 bool scheduler_ipc_request_response_discovery_self_test(void) {
