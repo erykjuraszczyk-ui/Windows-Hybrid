@@ -163,7 +163,7 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 
 ## HYBRID OS v0.14.0 — IPC Delivery Receipts, Acknowledgements & Retry Core
 
-**Status: CI validation pending.** Nie oznaczaj tej wersji jako PASS, dopóki przebieg GitHub Actions nie zbuduje ISO i nie potwierdzi markera QEMU.
+**Status: CI PASS po scaleniu.** Przebieg [GitHub Actions #40509463072](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40509463072) zbudował ISO, uruchomił testy w QEMU i potwierdził markery `IPC_RECEIPTS_RETRIES_SELFTEST_OK`, `IPC_DIAGNOSTICS_OK` oraz `BOOT_OK`.
 
 - `scheduler_ipc_service_send_reliable()` rozpoczyna śledzoną dostawę z niezerowym `delivery_id` oraz limitem prób.
 - `scheduler_ipc_delivery_get_receipt()` udostępnia stan, numer próby, limit, endpointy, request ID i ostatni wynik.
