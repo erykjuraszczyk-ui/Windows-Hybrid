@@ -42,6 +42,14 @@ typedef struct {
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
 static scheduler_ipc_pending_call_t ipc_pending_calls[SCHEDULER_IPC_MAX_PENDING_CALLS];
+static uint64_t ipc_diag_calls_started;
+static uint64_t ipc_diag_calls_completed;
+static uint64_t ipc_diag_calls_timed_out;
+static uint64_t ipc_diag_calls_cancelled;
+static uint64_t ipc_diag_calls_service_unavailable;
+static uint64_t ipc_diag_calls_send_failed;
+static uint64_t ipc_diag_replies_dropped;
+static uint64_t ipc_diag_services_closed;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
 static uint32_t ipc_expired_history_cursor;
@@ -972,14 +980,7 @@ typedef struct {
 
 static scheduler_ipc_service_t ipc_services[SCHEDULER_IPC_MAX_SERVICES];
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
-static uint64_t ipc_diag_calls_started;
-static uint64_t ipc_diag_calls_completed;
-static uint64_t ipc_diag_calls_timed_out;
-static uint64_t ipc_diag_calls_cancelled;
-static uint64_t ipc_diag_calls_service_unavailable;
-static uint64_t ipc_diag_calls_send_failed;
-static uint64_t ipc_diag_replies_dropped;
-static uint64_t ipc_diag_services_closed;
+
 
 static uint32_t scheduler_ipc_name_length(const char *name) {
     if (name == NULL) return 0U;
