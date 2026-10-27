@@ -974,12 +974,28 @@ typedef struct {
     scheduler_ipc_service_id_t id;
     uint32_t capabilities;
     uint32_t active_calls;
+    scheduler_ipc_queue_policy_t queue_policy;
+    uint32_t queue_high_watermark;
+    uint64_t messages_enqueued;
+    uint64_t messages_received;
+    uint64_t backpressure_events;
+    uint64_t messages_dropped_newest;
+    uint64_t messages_dropped_oldest;
+    uint64_t messages_rejected_full;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
     scheduler_ipc_channel_t channel;
 } scheduler_ipc_service_t;
 
 static scheduler_ipc_service_t ipc_services[SCHEDULER_IPC_MAX_SERVICES];
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
+static uint64_t ipc_diag_messages_enqueued;
+static uint64_t ipc_diag_messages_received;
+static uint64_t ipc_diag_backpressure_events;
+static uint64_t ipc_diag_messages_dropped_newest;
+static uint64_t ipc_diag_messages_dropped_oldest;
+static uint64_t ipc_diag_messages_rejected_full;
+static uint64_t ipc_diag_delivery_failures;
+static uint32_t ipc_diag_max_queue_depth;
 
 
 static uint32_t scheduler_ipc_name_length(const char *name) {
@@ -1016,6 +1032,14 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->id = 0U;
     service->capabilities = 0U;
     service->active_calls = 0U;
+    service->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
+    service->queue_high_watermark = 0U;
+    service->messages_enqueued = 0U;
+    service->messages_received = 0U;
+    service->backpressure_events = 0U;
+    service->messages_dropped_newest = 0U;
+    service->messages_dropped_oldest = 0U;
+    service->messages_rejected_full = 0U;
     service->channel.head = 0U;
     service->channel.tail = 0U;
     service->channel.count = 0U;
@@ -1120,6 +1144,14 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->id = next_ipc_service_id++;
     free_slot->capabilities = capabilities;
     free_slot->active_calls = 0U;
+    free_slot->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
+    free_slot->queue_high_watermark = 0U;
+    free_slot->messages_enqueued = 0U;
+    free_slot->messages_received = 0U;
+    free_slot->backpressure_events = 0U;
+    free_slot->messages_dropped_newest = 0U;
+    free_slot->messages_dropped_oldest = 0U;
+    free_slot->messages_rejected_full = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         free_slot->name[i] = '\0';
     for (uint32_t i = 0U; i < name_length; ++i)
@@ -1155,6 +1187,14 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->capabilities = service->capabilities;
     info->queued_messages = service->channel.count;
     info->queue_capacity = SCHEDULER_IPC_CAPACITY;
+    info->queue_policy = service->queue_policy;
+    info->queue_high_watermark = service->queue_high_watermark;
+    info->messages_enqueued = service->messages_enqueued;
+    info->messages_received = service->messages_received;
+    info->backpressure_events = service->backpressure_events;
+    info->messages_dropped_newest = service->messages_dropped_newest;
+    info->messages_dropped_oldest = service->messages_dropped_oldest;
+    info->messages_rejected_full = service->messages_rejected_full;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         info->name[i] = service->name[i];
 }
@@ -1185,6 +1225,21 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
         return false;
     }
     scheduler_ipc_service_info_copy_locked(service, info);
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_id,
+                                             scheduler_ipc_queue_policy_t policy) {
+    if ((uint32_t)policy > (uint32_t)SCHEDULER_IPC_QUEUE_DROP_OLDEST)
+        return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->queue_policy = policy;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -1234,6 +1289,92 @@ bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id) {
     return true;
 }
 
+static void scheduler_ipc_record_enqueue_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL) return;
+    ++service->messages_enqueued;
+    ++ipc_diag_messages_enqueued;
+    if (service->channel.count > service->queue_high_watermark)
+        service->queue_high_watermark = service->channel.count;
+    if (service->channel.count > ipc_diag_max_queue_depth)
+        ipc_diag_max_queue_depth = service->channel.count;
+}
+
+static bool scheduler_ipc_delivery_accepted(scheduler_ipc_delivery_result_t result) {
+    return result == SCHEDULER_IPC_DELIVERY_DELIVERED ||
+           result == SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST;
+}
+
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id,
+    const scheduler_ipc_message_t *message) {
+    if (source_service_id == 0U || destination_service_id == 0U ||
+        !scheduler_ipc_message_valid(message))
+        return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
+
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(destination_service_id);
+    if (source == NULL || destination == NULL) {
+        ++ipc_diag_delivery_failures;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND;
+    }
+    if (source->closing || destination->closing) {
+        ++ipc_diag_delivery_failures;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED;
+    }
+
+    scheduler_ipc_channel_t *channel = &destination->channel;
+    if (channel->count > SCHEDULER_IPC_CAPACITY ||
+        channel->head >= SCHEDULER_IPC_CAPACITY ||
+        channel->tail >= SCHEDULER_IPC_CAPACITY) {
+        ++ipc_diag_delivery_failures;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR;
+    }
+
+    scheduler_ipc_delivery_result_t result = SCHEDULER_IPC_DELIVERY_DELIVERED;
+    if (channel->count == SCHEDULER_IPC_CAPACITY) {
+        ++destination->backpressure_events;
+        ++ipc_diag_backpressure_events;
+        if (destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_NEWEST) {
+            ++destination->messages_dropped_newest;
+            ++ipc_diag_messages_dropped_newest;
+            scheduler_irq_restore(flags);
+            return SCHEDULER_IPC_DELIVERY_DROPPED_NEWEST;
+        }
+        if (destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_OLDEST) {
+            channel->head = (channel->head + 1U) % SCHEDULER_IPC_CAPACITY;
+            --channel->count;
+            ++destination->messages_dropped_oldest;
+            ++ipc_diag_messages_dropped_oldest;
+            result = SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST;
+        } else {
+            ++destination->messages_rejected_full;
+            ++ipc_diag_messages_rejected_full;
+            scheduler_irq_restore(flags);
+            return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
+        }
+    }
+
+    scheduler_ipc_message_t forwarded;
+    scheduler_ipc_message_copy(&forwarded, message);
+    forwarded.source_service_id = source_service_id;
+    forwarded.request_id = request_id;
+    scheduler_ipc_message_copy(&channel->messages[channel->tail], &forwarded);
+    channel->tail = (channel->tail + 1U) % SCHEDULER_IPC_CAPACITY;
+    ++channel->count;
+    scheduler_ipc_record_enqueue_locked(destination);
+    if (channel->readers.waiters != 0U)
+        (void)wait_queue_wake_one_locked(&channel->readers);
+    scheduler_irq_restore(flags);
+    return result;
+}
+
 bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
                                 scheduler_ipc_service_id_t destination_service_id,
                                 uint32_t request_id,
@@ -1250,6 +1391,12 @@ bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
         scheduler_irq_restore(flags);
         return false;
     }
+    if (destination->queue_policy != SCHEDULER_IPC_QUEUE_BLOCK) {
+        scheduler_irq_restore(flags);
+        return scheduler_ipc_delivery_accepted(
+            scheduler_ipc_service_send_ex(source_service_id, destination_service_id,
+                                          request_id, message));
+    }
     ++source->active_calls;
     ++destination->active_calls;
     scheduler_ipc_channel_t *channel = &destination->channel;
@@ -1262,6 +1409,8 @@ bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
     const bool sent = scheduler_ipc_send(channel, &forwarded);
 
     const uint64_t finish_flags = scheduler_irq_save_disable();
+    if (sent) scheduler_ipc_record_enqueue_locked(destination);
+    else ++ipc_diag_delivery_failures;
     scheduler_ipc_service_release_ref_locked(source);
     scheduler_ipc_service_release_ref_locked(destination);
     scheduler_irq_restore(finish_flags);
@@ -1284,35 +1433,57 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     const bool received = scheduler_ipc_receive(channel, message);
 
     const uint64_t finish_flags = scheduler_irq_save_disable();
+    if (received) {
+        ++service->messages_received;
+        ++ipc_diag_messages_received;
+    }
     scheduler_ipc_service_release_ref_locked(service);
     scheduler_irq_restore(finish_flags);
     return received;
 }
 
 
-bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_service_id,
-                                        scheduler_ipc_service_id_t destination_service_id,
-                                        uint32_t request_id,
-                                        const scheduler_ipc_message_t *request) {
-    if (request_id == 0U || !scheduler_ipc_message_valid(request)) return false;
+ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_request_ex(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id,
+    const scheduler_ipc_message_t *request) {
+    if (request_id == 0U || !scheduler_ipc_message_valid(request))
+        return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
     const uint64_t flags = scheduler_irq_save_disable();
     scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
     scheduler_ipc_service_t *destination =
         scheduler_ipc_find_service_locked(destination_service_id);
-    const bool allowed = source != NULL && destination != NULL &&
-        !source->closing && !destination->closing &&
+    if (source == NULL || destination == NULL) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND;
+    }
+    if (source->closing || destination->closing) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED;
+    }
+    const bool allowed =
         (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
         (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
     scheduler_irq_restore(flags);
-    if (!allowed) return false;
+    if (!allowed) return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
 
     scheduler_ipc_message_t message;
     scheduler_ipc_message_copy(&message, request);
     message.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
     message.kind = SCHEDULER_IPC_KIND_REQUEST;
     message.status = SCHEDULER_IPC_STATUS_OK;
-    return scheduler_ipc_service_send(source_service_id, destination_service_id,
-                                      request_id, &message);
+    return scheduler_ipc_service_send_ex(source_service_id, destination_service_id,
+                                         request_id, &message);
+}
+
+bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_service_id,
+                                        scheduler_ipc_service_id_t destination_service_id,
+                                        uint32_t request_id,
+                                        const scheduler_ipc_message_t *request) {
+    return scheduler_ipc_delivery_accepted(
+        scheduler_ipc_service_send_request_ex(source_service_id, destination_service_id,
+                                              request_id, request));
 }
 
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
@@ -1633,6 +1804,14 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->calls_send_failed = ipc_diag_calls_send_failed;
     diagnostics->replies_dropped = ipc_diag_replies_dropped;
     diagnostics->services_closed = ipc_diag_services_closed;
+    diagnostics->messages_enqueued = ipc_diag_messages_enqueued;
+    diagnostics->messages_received = ipc_diag_messages_received;
+    diagnostics->backpressure_events = ipc_diag_backpressure_events;
+    diagnostics->messages_dropped_newest = ipc_diag_messages_dropped_newest;
+    diagnostics->messages_dropped_oldest = ipc_diag_messages_dropped_oldest;
+    diagnostics->messages_rejected_full = ipc_diag_messages_rejected_full;
+    diagnostics->delivery_failures = ipc_diag_delivery_failures;
+    diagnostics->max_queue_depth = ipc_diag_max_queue_depth;
     diagnostics->pending_calls = 0U;
     diagnostics->active_services = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i)
@@ -2183,6 +2362,116 @@ static void ipc_lifecycle_controller(void) {
     ipc_lifecycle_unregister_ok =
         scheduler_ipc_service_unregister(ipc_lifecycle_server_id) ? 1U : 0U;
     if (!ipc_lifecycle_unregister_ok) ++ipc_lifecycle_errors;
+}
+
+
+bool scheduler_ipc_backpressure_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_diagnostics_t before = {0};
+    scheduler_ipc_get_diagnostics(&before);
+    scheduler_ipc_service_id_t source_id = 0U, destination_id = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("queue.src", caps, &source_id) ||
+        !scheduler_ipc_service_register_ex("queue.dst", caps, &destination_id))
+        return false;
+
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(destination_id, &info) ||
+        info.queue_policy != SCHEDULER_IPC_QUEUE_BLOCK ||
+        info.queued_messages != 0U) return false;
+
+    /* A nonblocking send reports pressure even when the service's legacy policy blocks. */
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t message = {0};
+        message.type = UINT32_C(0x51554555);
+        message.length = 1U;
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, i, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x51554555);
+    if (scheduler_ipc_service_send_ex(source_id, destination_id, 99U, &message) !=
+        SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t received = {0};
+        if (!scheduler_ipc_service_receive(destination_id, &received) ||
+            received.request_id != i || received.payload[0] != (uint8_t)i)
+            return false;
+    }
+
+    if (!scheduler_ipc_service_set_queue_policy(destination_id,
+                                                 SCHEDULER_IPC_QUEUE_REJECT))
+        return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 100U + i,
+                &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    if (scheduler_ipc_service_send_ex(source_id, destination_id, 199U, &message) !=
+        SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t received = {0};
+        if (!scheduler_ipc_service_receive(destination_id, &received) ||
+            received.request_id != 100U + i) return false;
+    }
+
+    if (!scheduler_ipc_service_set_queue_policy(destination_id,
+                                                 SCHEDULER_IPC_QUEUE_DROP_NEWEST))
+        return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 200U + i,
+                &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    if (scheduler_ipc_service_send_ex(source_id, destination_id, 299U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DROPPED_NEWEST) return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t received = {0};
+        if (!scheduler_ipc_service_receive(destination_id, &received) ||
+            received.request_id != 200U + i) return false;
+    }
+
+    if (!scheduler_ipc_service_set_queue_policy(destination_id,
+                                                 SCHEDULER_IPC_QUEUE_DROP_OLDEST))
+        return false;
+    for (uint32_t i = 1U; i <= SCHEDULER_IPC_CAPACITY; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 300U + i,
+                &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    if (scheduler_ipc_service_send_ex(source_id, destination_id, 305U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST) return false;
+    for (uint32_t i = 2U; i <= SCHEDULER_IPC_CAPACITY + 1U; ++i) {
+        scheduler_ipc_message_t received = {0};
+        const uint32_t expected_id = 300U + i;
+        if (!scheduler_ipc_service_receive(destination_id, &received) ||
+            received.request_id != expected_id) return false;
+    }
+
+    if (!scheduler_ipc_service_get_info(destination_id, &info) ||
+        info.queued_messages != 0U || info.queue_capacity != SCHEDULER_IPC_CAPACITY ||
+        info.queue_policy != SCHEDULER_IPC_QUEUE_DROP_OLDEST ||
+        info.queue_high_watermark != SCHEDULER_IPC_CAPACITY ||
+        info.messages_enqueued != 17U || info.messages_received != 16U ||
+        info.backpressure_events != 4U || info.messages_dropped_newest != 1U ||
+        info.messages_dropped_oldest != 1U || info.messages_rejected_full != 2U)
+        return false;
+
+    scheduler_ipc_diagnostics_t after = {0};
+    scheduler_ipc_get_diagnostics(&after);
+    if (after.messages_enqueued != before.messages_enqueued + 17U ||
+        after.messages_received != before.messages_received + 16U ||
+        after.backpressure_events != before.backpressure_events + 4U ||
+        after.messages_dropped_newest != before.messages_dropped_newest + 1U ||
+        after.messages_dropped_oldest != before.messages_dropped_oldest + 1U ||
+        after.messages_rejected_full != before.messages_rejected_full + 2U ||
+        after.max_queue_depth < SCHEDULER_IPC_CAPACITY)
+        return false;
+
+    return scheduler_ipc_service_unregister(destination_id) &&
+           scheduler_ipc_service_unregister(source_id) &&
+           scheduler_ipc_service_count() == 0U;
 }
 
 bool scheduler_ipc_lifecycle_self_test(void) {
