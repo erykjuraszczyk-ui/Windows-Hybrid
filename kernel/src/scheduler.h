@@ -61,6 +61,18 @@ typedef struct {
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
 typedef struct {
+    uint64_t calls_started;
+    uint64_t calls_completed;
+    uint64_t calls_timed_out;
+    uint64_t calls_cancelled;
+    uint64_t calls_service_unavailable;
+    uint64_t calls_send_failed;
+    uint64_t replies_dropped;
+    uint64_t services_closed;
+    uint32_t pending_calls;
+    uint32_t active_services;
+} scheduler_ipc_diagnostics_t;
+typedef struct {
     scheduler_ipc_message_t messages[SCHEDULER_IPC_CAPACITY];
     uint32_t head;
     uint32_t tail;
@@ -147,7 +159,9 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
 bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
                                uint32_t request_id);
 uint32_t scheduler_ipc_pending_call_count(void);
+void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics);
 bool scheduler_ipc_runtime_self_test(void);
+bool scheduler_ipc_lifecycle_self_test(void);
 
 bool scheduler_ipc_service_self_test(void);
 bool scheduler_ipc_request_response_discovery_self_test(void);
