@@ -1845,13 +1845,11 @@ bool scheduler_ipc_service_self_test(void) {
           ipc_service_test_sink_id, 7U,
           &(scheduler_ipc_message_t){.type = 9U, .length = 0U}))
         return false;
-    if (scheduler_ipc_service_unregister(ipc_service_test_sink_id)) return false;
+    /* v0.12.0 unregister actively closes the endpoint and drops queued work. */
+    if (!scheduler_ipc_service_unregister(ipc_service_test_sink_id)) return false;
     scheduler_ipc_message_t sink_message = {0};
-    if (!scheduler_ipc_service_receive(ipc_service_test_sink_id, &sink_message) ||
-        sink_message.source_service_id != ipc_service_test_client_id ||
-        sink_message.request_id != 7U ||
-        sink_message.kind != SCHEDULER_IPC_KIND_DATA ||
-        !scheduler_ipc_service_unregister(ipc_service_test_sink_id) ||
+    if (scheduler_ipc_service_receive(ipc_service_test_sink_id, &sink_message) ||
+        scheduler_ipc_service_unregister(ipc_service_test_sink_id) ||
         !scheduler_ipc_service_unregister(ipc_service_test_server_id) ||
         !scheduler_ipc_service_unregister(ipc_service_test_client_id) ||
         scheduler_ipc_service_count() != 0U)
