@@ -186,3 +186,16 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 - Diagnostyka raportuje automatyczne retry, wygasłe deadline’y, wpisy dead-letter oraz liczbę wpisów aktualnie oczekujących. Test QEMU sprawdza retry timera z tłumieniem duplikatów, ACK przed deadline’em, terminalne wygaśnięcie i odczyt dead-letter.
 
 **Semantyka:** ticki PIT są jednostką czasu kernela, nie zegarem czasu rzeczywistego. To mechanizm in-memory; DLQ i receipt giną po resecie. ACK nadal oznacza potwierdzenie przez usługę, a nie trwałość efektu ubocznego ani exactly-once.
+
+
+## HYBRID OS v0.16.0 — IPC Retry Backoff, Circuit Breakers & Service Health Monitoring
+
+**Status: CI validation pending.** Nie oznaczaj tej wersji jako PASS, dopóki najnowszy przebieg GitHub Actions nie potwierdzi ISO oraz markera QEMU.
+
+- `scheduler_ipc_service_send_reliable_backoff()` wprowadza wykładnicze odstępy retry z wartością początkową i maksymalnym limitem; stare `scheduler_ipc_service_send_reliable_timed()` zachowuje stały interwał.
+- Circuit breaker jest konfigurowany per usługa (`failure_threshold`, `reset_timeout_ticks`). Stan `CLOSED` przepuszcza operacje, `OPEN` blokuje próby do końca cooldownu, a `HALF_OPEN` dopuszcza jedną próbę kontrolną.
+- `scheduler_ipc_service_get_health()` raportuje stan zdrowia i obwodu, liczbę kolejnych awarii, łączne sukcesy/awarie oraz ticki ostatnich zdarzeń. Wyniki nieblokującego `scheduler_ipc_service_send_ex()` aktualizują te metryki automatycznie.
+- Diagnostyka globalna liczy awarie i sukcesy zdrowia usług, otwarcia obwodu, odzyskania po udanej sondzie i odrzucone próby w stanie OPEN.
+- Test QEMU zapełnia kolejkę celu, wywołuje próg awarii, sprawdza odrzucenie w OPEN, opróżnia kolejkę i potwierdza odzyskanie po cooldownie oraz ACK po udanej sondzie.
+
+**Ograniczenia:** progi oraz cooldown są oparte na tickach PIT, a nie czasie rzeczywistym. Circuit breaker działa na ścieżce nieblokującego IPC, nie jest zabezpieczeniem SMP i nie gwarantuje exactly-once. Domyślnie jest wyłączony, aby nie zmieniać zachowania dotychczasowych klientów.

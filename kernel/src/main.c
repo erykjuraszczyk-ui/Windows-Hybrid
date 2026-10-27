@@ -358,6 +358,11 @@ void kmain(void) {
         return;
     }
     serial_write("HYBRID: IPC_TIMER_RETRY_DEAD_LETTER_SELFTEST_OK\n");
+    if (!scheduler_ipc_circuit_breaker_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_CIRCUIT_BREAKER\n");
+        return;
+    }
+    serial_write("HYBRID: IPC_CIRCUIT_BREAKER_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||

@@ -983,6 +983,17 @@ typedef struct {
     uint64_t messages_dropped_newest;
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
+    scheduler_ipc_circuit_state_t circuit_state;
+    scheduler_ipc_health_state_t health_state;
+    uint32_t breaker_failure_threshold;
+    uint32_t consecutive_failures;
+    uint64_t breaker_reset_timeout_ticks;
+    uint64_t breaker_open_until_tick;
+    uint64_t health_total_successes;
+    uint64_t health_total_failures;
+    uint64_t health_last_success_tick;
+    uint64_t health_last_failure_tick;
+    bool half_open_probe_in_flight;
     uint32_t received_delivery_ids[SCHEDULER_IPC_DELIVERY_HISTORY];
     uint32_t received_delivery_cursor;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
@@ -992,6 +1003,7 @@ typedef struct {
 typedef struct {
     bool valid;
     bool timer_driven;
+    bool backoff_enabled;
     bool dead_lettered;
     scheduler_ipc_delivery_receipt_t receipt;
     scheduler_ipc_message_t message;
@@ -1017,6 +1029,11 @@ static uint64_t ipc_diag_automatic_retry_attempts;
 static uint64_t ipc_diag_delivery_deadlines_expired;
 static uint64_t ipc_diag_dead_letters_enqueued;
 static uint64_t ipc_diag_dead_letters_dropped;
+static uint64_t ipc_diag_service_health_successes;
+static uint64_t ipc_diag_service_health_failures;
+static uint64_t ipc_diag_circuit_breaker_trips;
+static uint64_t ipc_diag_circuit_breaker_recoveries;
+static uint64_t ipc_diag_circuit_open_rejections;
 static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
 static uint32_t ipc_dead_letter_head;
 static uint32_t ipc_dead_letter_count;
@@ -1064,6 +1081,17 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->messages_dropped_newest = 0U;
     service->messages_dropped_oldest = 0U;
     service->messages_rejected_full = 0U;
+    service->circuit_state = SCHEDULER_IPC_CIRCUIT_CLOSED;
+    service->health_state = SCHEDULER_IPC_HEALTHY;
+    service->breaker_failure_threshold = 0U;
+    service->consecutive_failures = 0U;
+    service->breaker_reset_timeout_ticks = 0U;
+    service->breaker_open_until_tick = 0U;
+    service->health_total_successes = 0U;
+    service->health_total_failures = 0U;
+    service->health_last_success_tick = 0U;
+    service->health_last_failure_tick = 0U;
+    service->half_open_probe_in_flight = false;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_DELIVERY_HISTORY; ++i)
         service->received_delivery_ids[i] = 0U;
     service->received_delivery_cursor = 0U;
@@ -1179,6 +1207,17 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->messages_dropped_newest = 0U;
     free_slot->messages_dropped_oldest = 0U;
     free_slot->messages_rejected_full = 0U;
+    free_slot->circuit_state = SCHEDULER_IPC_CIRCUIT_CLOSED;
+    free_slot->health_state = SCHEDULER_IPC_HEALTHY;
+    free_slot->breaker_failure_threshold = 0U;
+    free_slot->consecutive_failures = 0U;
+    free_slot->breaker_reset_timeout_ticks = 0U;
+    free_slot->breaker_open_until_tick = 0U;
+    free_slot->health_total_successes = 0U;
+    free_slot->health_total_failures = 0U;
+    free_slot->health_last_success_tick = 0U;
+    free_slot->health_last_failure_tick = 0U;
+    free_slot->half_open_probe_in_flight = false;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_DELIVERY_HISTORY; ++i)
         free_slot->received_delivery_ids[i] = 0U;
     free_slot->received_delivery_cursor = 0U;
@@ -1270,6 +1309,51 @@ bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_i
         return false;
     }
     service->queue_policy = policy;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_set_circuit_breaker(scheduler_ipc_service_id_t service_id,
+                                                uint32_t failure_threshold,
+                                                uint64_t reset_timeout_ticks) {
+    if ((failure_threshold == 0U) != (reset_timeout_ticks == 0U)) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->breaker_failure_threshold = failure_threshold;
+    service->breaker_reset_timeout_ticks = reset_timeout_ticks;
+    service->consecutive_failures = 0U;
+    service->circuit_state = SCHEDULER_IPC_CIRCUIT_CLOSED;
+    service->health_state = SCHEDULER_IPC_HEALTHY;
+    service->breaker_open_until_tick = 0U;
+    service->half_open_probe_in_flight = false;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_get_health(scheduler_ipc_service_id_t service_id,
+                                      scheduler_ipc_service_health_t *health) {
+    if (health == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    health->service_id = service->id;
+    health->circuit_state = service->circuit_state;
+    health->health_state = service->health_state;
+    health->failure_threshold = service->breaker_failure_threshold;
+    health->consecutive_failures = service->consecutive_failures;
+    health->reset_timeout_ticks = service->breaker_reset_timeout_ticks;
+    health->open_until_tick = service->breaker_open_until_tick;
+    health->total_successes = service->health_total_successes;
+    health->total_failures = service->health_total_failures;
+    health->last_success_tick = service->health_last_success_tick;
+    health->last_failure_tick = service->health_last_failure_tick;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -1372,6 +1456,62 @@ static uint64_t scheduler_ipc_tick_add_saturating(uint64_t tick, uint64_t delta)
     return UINT64_MAX - tick < delta ? UINT64_MAX : tick + delta;
 }
 
+static bool scheduler_ipc_circuit_admit_locked(scheduler_ipc_service_t *service,
+                                                uint64_t now) {
+    if (service == NULL || service->breaker_failure_threshold == 0U) return true;
+    if (service->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN) {
+        if (now < service->breaker_open_until_tick) {
+            ++ipc_diag_circuit_open_rejections;
+            return false;
+        }
+        service->circuit_state = SCHEDULER_IPC_CIRCUIT_HALF_OPEN;
+        service->health_state = SCHEDULER_IPC_HEALTH_DEGRADED;
+        service->half_open_probe_in_flight = false;
+    }
+    if (service->circuit_state == SCHEDULER_IPC_CIRCUIT_HALF_OPEN) {
+        if (service->half_open_probe_in_flight) {
+            ++ipc_diag_circuit_open_rejections;
+            return false;
+        }
+        service->half_open_probe_in_flight = true;
+    }
+    return true;
+}
+
+static void scheduler_ipc_service_report_locked(scheduler_ipc_service_t *service,
+                                                bool success, uint64_t now) {
+    if (service == NULL) return;
+    if (success) {
+        ++service->health_total_successes;
+        ++ipc_diag_service_health_successes;
+        service->health_last_success_tick = now;
+        service->consecutive_failures = 0U;
+        service->health_state = SCHEDULER_IPC_HEALTHY;
+        if (service->circuit_state != SCHEDULER_IPC_CIRCUIT_CLOSED) {
+            ++ipc_diag_circuit_breaker_recoveries;
+            service->circuit_state = SCHEDULER_IPC_CIRCUIT_CLOSED;
+        }
+        service->breaker_open_until_tick = 0U;
+        service->half_open_probe_in_flight = false;
+        return;
+    }
+    ++service->health_total_failures;
+    ++ipc_diag_service_health_failures;
+    service->health_last_failure_tick = now;
+    if (service->consecutive_failures != UINT32_MAX) ++service->consecutive_failures;
+    service->health_state = SCHEDULER_IPC_HEALTH_DEGRADED;
+    const bool half_open_failure = service->circuit_state == SCHEDULER_IPC_CIRCUIT_HALF_OPEN;
+    if (service->breaker_failure_threshold != 0U &&
+        (half_open_failure || service->consecutive_failures >= service->breaker_failure_threshold)) {
+        service->circuit_state = SCHEDULER_IPC_CIRCUIT_OPEN;
+        service->breaker_open_until_tick = scheduler_ipc_tick_add_saturating(
+            now, service->breaker_reset_timeout_ticks);
+        service->half_open_probe_in_flight = false;
+        service->health_state = SCHEDULER_IPC_HEALTH_UNAVAILABLE;
+        ++ipc_diag_circuit_breaker_trips;
+    }
+}
+
 /* Caller holds local interrupt exclusion; the queue is intentionally bounded. */
 static void scheduler_ipc_dead_letter_enqueue_locked(
     scheduler_ipc_delivery_track_t *track,
@@ -1414,8 +1554,13 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     }
     if (source->closing || destination->closing) {
         ++ipc_diag_delivery_failures;
+        scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED;
+    }
+    if (!scheduler_ipc_circuit_admit_locked(destination, interrupts_ticks())) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
     }
 
     scheduler_ipc_channel_t *channel = &destination->channel;
@@ -1423,6 +1568,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         channel->head >= SCHEDULER_IPC_CAPACITY ||
         channel->tail >= SCHEDULER_IPC_CAPACITY) {
         ++ipc_diag_delivery_failures;
+        scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR;
     }
@@ -1434,6 +1580,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         if (destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_NEWEST) {
             ++destination->messages_dropped_newest;
             ++ipc_diag_messages_dropped_newest;
+            scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
             scheduler_irq_restore(flags);
             return SCHEDULER_IPC_DELIVERY_DROPPED_NEWEST;
         }
@@ -1446,6 +1593,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         } else {
             ++destination->messages_rejected_full;
             ++ipc_diag_messages_rejected_full;
+            scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
             scheduler_irq_restore(flags);
             return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
         }
@@ -1461,6 +1609,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     scheduler_ipc_record_enqueue_locked(destination);
     if (channel->readers.waiters != 0U)
         (void)wait_queue_wake_one_locked(&channel->readers);
+    scheduler_ipc_service_report_locked(destination, true, interrupts_ticks());
     scheduler_irq_restore(flags);
     return result;
 }
@@ -1541,15 +1690,18 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
 
 /* Bounded in-memory delivery tracking. ACK must follow receiver-side processing;
  * receipts are not persistent across reboot. */
-scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_backoff(
     scheduler_ipc_service_id_t source_service_id,
     scheduler_ipc_service_id_t destination_service_id,
     uint32_t delivery_id, uint32_t request_id,
     const scheduler_ipc_message_t *message, uint32_t max_attempts,
-    uint64_t retry_interval_ticks, uint64_t deadline_ticks) {
+    uint64_t retry_interval_ticks, uint64_t max_retry_interval_ticks,
+    uint64_t deadline_ticks) {
     if (source_service_id == 0U || destination_service_id == 0U ||
         delivery_id == 0U || request_id == 0U || max_attempts == 0U ||
         ((retry_interval_ticks == 0U) != (deadline_ticks == 0U)) ||
+        (retry_interval_ticks == 0U && max_retry_interval_ticks != 0U) ||
+        (retry_interval_ticks != 0U && max_retry_interval_ticks < retry_interval_ticks) ||
         !scheduler_ipc_message_valid(message))
         return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
 
@@ -1581,12 +1733,14 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
     slot->receipt.request_id = request_id;
     slot->receipt.last_result = SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
     slot->receipt.retry_interval_ticks = retry_interval_ticks;
+    slot->receipt.max_retry_interval_ticks = max_retry_interval_ticks;
     const uint64_t now = interrupts_ticks();
     slot->receipt.deadline_tick = deadline_ticks == 0U ? 0U :
         scheduler_ipc_tick_add_saturating(now, deadline_ticks);
     slot->receipt.next_retry_tick = retry_interval_ticks == 0U ? 0U :
         scheduler_ipc_tick_add_saturating(now, retry_interval_ticks);
     slot->timer_driven = retry_interval_ticks != 0U;
+    slot->backoff_enabled = max_retry_interval_ticks > retry_interval_ticks;
     slot->dead_lettered = false;
     scheduler_ipc_message_copy(&slot->message, message);
     slot->message.delivery_id = delivery_id;
@@ -1606,7 +1760,8 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
             current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
         } else if (current->receipt.attempts >= current->receipt.max_attempts &&
                    !scheduler_ipc_delivery_accepted(result) &&
-                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED &&
+                   result != SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN) {
             current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
             current->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
             ++ipc_diag_delivery_retries_exhausted;
@@ -1618,6 +1773,17 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
     }
     scheduler_irq_restore(finish_flags);
     return result;
+}
+
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t delivery_id, uint32_t request_id,
+    const scheduler_ipc_message_t *message, uint32_t max_attempts,
+    uint64_t retry_interval_ticks, uint64_t deadline_ticks) {
+    return scheduler_ipc_service_send_reliable_backoff(source_service_id,
+        destination_service_id, delivery_id, request_id, message, max_attempts,
+        retry_interval_ticks, retry_interval_ticks, deadline_ticks);
 }
 
 scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
@@ -1670,6 +1836,31 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
         scheduler_irq_restore(flags);
         return track->receipt.last_result;
     }
+    scheduler_ipc_service_t *gate_destination =
+        scheduler_ipc_find_service_locked(track->receipt.destination_service_id);
+    if (gate_destination != NULL && gate_destination->breaker_failure_threshold != 0U) {
+        const uint64_t now = interrupts_ticks();
+        if (gate_destination->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN &&
+            now < gate_destination->breaker_open_until_tick) {
+            ++ipc_diag_circuit_open_rejections;
+            track->receipt.last_result = SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
+            scheduler_irq_restore(flags);
+            return SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
+        }
+        if (gate_destination->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN &&
+            now >= gate_destination->breaker_open_until_tick) {
+            gate_destination->circuit_state = SCHEDULER_IPC_CIRCUIT_HALF_OPEN;
+            gate_destination->health_state = SCHEDULER_IPC_HEALTH_DEGRADED;
+            gate_destination->half_open_probe_in_flight = false;
+        }
+        if (gate_destination->circuit_state == SCHEDULER_IPC_CIRCUIT_HALF_OPEN &&
+            gate_destination->half_open_probe_in_flight) {
+            ++ipc_diag_circuit_open_rejections;
+            track->receipt.last_result = SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
+            scheduler_irq_restore(flags);
+            return SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
+        }
+    }
     if (track->receipt.attempts >= track->receipt.max_attempts) {
         track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
         track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
@@ -1708,7 +1899,8 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
             track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
         } else if (track->receipt.attempts >= track->receipt.max_attempts &&
                    !scheduler_ipc_delivery_accepted(result) &&
-                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED &&
+                   result != SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN) {
             track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
             track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
             ++ipc_diag_delivery_retries_exhausted;
@@ -1800,6 +1992,14 @@ static void scheduler_ipc_process_delivery_timers(uint64_t now) {
         if (track->receipt.next_retry_tick != 0U && now >= track->receipt.next_retry_tick &&
             track->receipt.attempts < track->receipt.max_attempts) {
             delivery_id = track->receipt.delivery_id;
+            if (track->backoff_enabled &&
+                track->receipt.retry_interval_ticks < track->receipt.max_retry_interval_ticks) {
+                uint64_t doubled = track->receipt.retry_interval_ticks > UINT64_MAX / 2U ?
+                    UINT64_MAX : track->receipt.retry_interval_ticks * 2U;
+                if (doubled > track->receipt.max_retry_interval_ticks)
+                    doubled = track->receipt.max_retry_interval_ticks;
+                track->receipt.retry_interval_ticks = doubled;
+            }
             track->receipt.next_retry_tick = scheduler_ipc_tick_add_saturating(
                 now, track->receipt.retry_interval_ticks);
             ++ipc_diag_automatic_retry_attempts;
@@ -2027,6 +2227,104 @@ bool scheduler_ipc_timer_retry_dead_letter_self_test(void) {
         scheduler_ipc_service_unregister(source_id) &&
         scheduler_ipc_service_count() == 0U;
     return diagnostics_ok && unregistered;
+}
+
+
+bool scheduler_ipc_circuit_breaker_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U ||
+        scheduler_ipc_delivery_pending_count() != 0U ||
+        scheduler_ipc_dead_letter_count() != 0U) return false;
+
+    scheduler_ipc_service_id_t source_id = 0U, destination_id = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("breaker.src", caps, &source_id) ||
+        !scheduler_ipc_service_register_ex("breaker.dst", caps, &destination_id))
+        return false;
+
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t filler = {0};
+        filler.type = UINT32_C(0x43425246);
+        filler.length = 1U;
+        filler.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 900U + i,
+                &filler) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    if (!scheduler_ipc_service_set_circuit_breaker(destination_id, 2U, 6U) ||
+        scheduler_ipc_service_set_circuit_breaker(destination_id, 0U, 6U) ||
+        scheduler_ipc_service_set_circuit_breaker(destination_id, 2U, 0U))
+        return false;
+
+    scheduler_ipc_diagnostics_t before = {0}, after = {0};
+    scheduler_ipc_get_diagnostics(&before);
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x4241434B);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0x7B);
+    const uint32_t delivery_id = UINT32_C(0x16000101);
+    if (scheduler_ipc_service_send_reliable_backoff(source_id, destination_id,
+            delivery_id, 61U, &message, 8U, 1U, 4U, 30U) !=
+            SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+
+    scheduler_ipc_delivery_receipt_t receipt = {0};
+    if (!scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.attempts != 1U || receipt.retry_interval_ticks != 1U ||
+        receipt.max_retry_interval_ticks != 4U) return false;
+    const uint64_t first_retry_tick = receipt.next_retry_tick;
+    interrupts_enable();
+    const bool first_waited = interrupts_wait_for_ticks(first_retry_tick + 1U);
+    interrupts_disable();
+    if (!first_waited ||
+        !scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.attempts != 2U || receipt.retry_interval_ticks != 2U)
+        return false;
+
+    scheduler_ipc_service_health_t health = {0};
+    if (!scheduler_ipc_service_get_health(destination_id, &health) ||
+        health.circuit_state != SCHEDULER_IPC_CIRCUIT_OPEN ||
+        health.health_state != SCHEDULER_IPC_HEALTH_UNAVAILABLE ||
+        health.consecutive_failures < 2U ||
+        scheduler_ipc_service_send_ex(source_id, destination_id, 990U, &message) !=
+            SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN)
+        return false;
+    const uint64_t open_until = health.open_until_tick;
+    if (open_until <= interrupts_ticks()) return false;
+
+    scheduler_ipc_message_t received = {0};
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
+        if (!scheduler_ipc_service_receive(destination_id, &received) ||
+            received.request_id != 900U + i) return false;
+    }
+    interrupts_enable();
+    const bool cooldown_waited = interrupts_wait_for_ticks(open_until + 1U);
+    interrupts_disable();
+    if (!cooldown_waited ||
+        !scheduler_ipc_service_get_health(destination_id, &health) ||
+        health.circuit_state != SCHEDULER_IPC_CIRCUIT_CLOSED ||
+        health.health_state != SCHEDULER_IPC_HEALTHY ||
+        !scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING ||
+        receipt.retry_interval_ticks != 4U)
+        return false;
+
+    if (!scheduler_ipc_service_receive(destination_id, &received) ||
+        received.delivery_id != delivery_id || received.request_id != 61U ||
+        received.payload[0] != UINT8_C(0x7B) ||
+        !scheduler_ipc_service_ack_delivery(destination_id, delivery_id) ||
+        !scheduler_ipc_delivery_get_receipt(delivery_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED)
+        return false;
+
+    scheduler_ipc_get_diagnostics(&after);
+    const bool stats_ok =
+        after.circuit_breaker_trips == before.circuit_breaker_trips + 1U &&
+        after.circuit_breaker_recoveries == before.circuit_breaker_recoveries + 1U &&
+        after.circuit_open_rejections > before.circuit_open_rejections &&
+        after.service_health_failures >= before.service_health_failures + 2U &&
+        after.service_health_successes > before.service_health_successes;
+    const bool unregistered = scheduler_ipc_service_unregister(destination_id) &&
+        scheduler_ipc_service_unregister(source_id) &&
+        scheduler_ipc_service_count() == 0U;
+    return stats_ok && unregistered;
 }
 
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
@@ -2363,6 +2661,11 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->delivery_deadlines_expired = ipc_diag_delivery_deadlines_expired;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
+    diagnostics->service_health_successes = ipc_diag_service_health_successes;
+    diagnostics->service_health_failures = ipc_diag_service_health_failures;
+    diagnostics->circuit_breaker_trips = ipc_diag_circuit_breaker_trips;
+    diagnostics->circuit_breaker_recoveries = ipc_diag_circuit_breaker_recoveries;
+    diagnostics->circuit_open_rejections = ipc_diag_circuit_open_rejections;
     diagnostics->dead_letters_pending = ipc_dead_letter_count;
     diagnostics->pending_deliveries = 0U;
     diagnostics->max_queue_depth = ipc_diag_max_queue_depth;

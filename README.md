@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.15.0 — IPC Timer-Driven Retry, Delivery Deadlines & Dead-Letter Queue; **walidacja CI w toku**.
+**Aktualny etap:** v0.16.0 — IPC Retry Backoff, Circuit Breakers & Service Health Monitoring; **walidacja CI w toku**.
 
 ## Historia statusu
 
@@ -18,7 +18,8 @@
 - **v0.11.0 — CI PASS po scaleniu:** pending-call runtime, timeouty, anulowanie i demultipleksowanie odpowiedzi.
 - **v0.13.0 — CI PASS na gałęzi funkcji:** polityki backpressure i diagnostyka kolejek ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40489874343)).
 - **v0.14.0 — CI PASS po scaleniu:** potwierdzenia dostarczenia, jawny ACK, ograniczone retry i tłumienie duplikatów ([QEMU regression](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40509463072)).
-- **v0.15.0 — walidacja CI w toku:** retry sterowane PIT, terminy dostaw, dead-letter queue i test regresyjny QEMU.
+- **v0.15.0 — CI PASS po scaleniu:** retry sterowane PIT, terminy dostaw i dead-letter queue.
+- **v0.16.0 — walidacja CI w toku:** wykładniczy backoff, circuit breakers i diagnostyka zdrowia usług.
 - **v0.12.0 — CI validation pending:** zamykanie usług, kończenie powiązanych wywołań i liczniki diagnostyczne.
 
 ## Potwierdzenie v0.5.0
@@ -66,6 +67,7 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 - [HYBRID OS v0.5.0 — Task Lifecycle, TSS/IST](docs/BOOTSTRAP_v0.5.0.md)
 - [HYBRID OS v0.14.0 — IPC Delivery Receipts, ACK & Retry](docs/BOOTSTRAP_v0.14.0.md)
 - [HYBRID OS v0.15.0 — Timer Retry, Deadlines & Dead-Letter Queue](docs/BOOTSTRAP_v0.15.0.md)
+- [HYBRID OS v0.16.0 — Retry Backoff, Circuit Breakers & Service Health](docs/BOOTSTRAP_v0.16.0.md)
 
 
 ## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
