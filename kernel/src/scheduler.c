@@ -1552,13 +1552,20 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
         source_service_id, destination_service_id, request_id, &slot->message);
     const uint64_t finish_flags = scheduler_irq_save_disable();
     scheduler_ipc_delivery_track_t *current = scheduler_ipc_find_delivery_locked(delivery_id);
-    if (current != NULL) {
+    if (current != NULL && current->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
         current->receipt.last_result = result;
         if (result == SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT ||
             result == SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND ||
             result == SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED ||
-            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR)
+            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR) {
             current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
+        } else if (current->receipt.attempts >= current->receipt.max_attempts &&
+                   !scheduler_ipc_delivery_accepted(result) &&
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+            current->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
+            current->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+            ++ipc_diag_delivery_retries_exhausted;
+        }
     }
     scheduler_irq_restore(finish_flags);
     return result;
@@ -1572,7 +1579,8 @@ bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_s
     scheduler_ipc_service_t *destination = scheduler_ipc_find_service_locked(destination_service_id);
     if (track == NULL || destination == NULL ||
         track->receipt.destination_service_id != destination_service_id ||
-        track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING ||
+        (track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING &&
+         track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED) ||
         !scheduler_ipc_service_has_received_delivery_locked(destination, delivery_id)) {
         scheduler_irq_restore(flags);
         return false;
@@ -1636,10 +1644,25 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
         if (result == SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT ||
             result == SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND ||
             result == SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED ||
-            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR)
+            result == SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR) {
             track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_FAILED;
+        } else if (track->receipt.attempts >= track->receipt.max_attempts &&
+                   !scheduler_ipc_delivery_accepted(result) &&
+                   result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+            track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
+            track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+            ++ipc_diag_delivery_retries_exhausted;
+        }
     }
     scheduler_irq_restore(finish_flags);
+    if (result != SCHEDULER_IPC_DELIVERY_DELIVERED &&
+        result != SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST &&
+        result != SCHEDULER_IPC_DELIVERY_DUPLICATE_SUPPRESSED) {
+        scheduler_ipc_delivery_receipt_t final_receipt = {0};
+        if (scheduler_ipc_delivery_get_receipt(delivery_id, &final_receipt) &&
+            final_receipt.state == SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED)
+            return SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
+    }
     return result;
 }
 
@@ -1712,7 +1735,7 @@ bool scheduler_ipc_receipt_retry_self_test(void) {
     if (scheduler_ipc_service_send_reliable(source_id, destination_id, exhausted_id,
             42U, &message, 2U) != SCHEDULER_IPC_DELIVERY_BACKPRESSURE ||
         scheduler_ipc_delivery_retry(exhausted_id) !=
-            SCHEDULER_IPC_DELIVERY_BACKPRESSURE ||
+            SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED ||
         scheduler_ipc_delivery_retry(exhausted_id) !=
             SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED ||
         !scheduler_ipc_delivery_get_receipt(exhausted_id, &receipt) ||
