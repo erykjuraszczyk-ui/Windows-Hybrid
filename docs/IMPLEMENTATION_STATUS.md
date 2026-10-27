@@ -144,3 +144,18 @@ Limitations: single-core Ring 0 prototype; no SMP safety, Ring 3 isolation, serv
 - QEMU self-test zamyka serwer po odebraniu żądania, weryfikuje przebudzenie klienta z `ERROR/NOT_FOUND` oraz brak pozostałych pending calls i usług.
 
 Ograniczenia: jednordzeniowy Ring 0; wyłączenie przerwań nie zapewnia synchronizacji SMP. Zamknięcie jest logicznie natychmiastowe, ale slot odzyskiwany jest po zwolnieniu ostatniej referencji. Brak izolacji procesów i autoryzacji usług.
+
+
+## HYBRID OS v0.13.0 — IPC Backpressure, Queue Policies & Delivery Guarantees
+
+**Status: CI validation pending.**
+
+- Każda usługa ma konfigurowalną politykę kolejki: `BLOCK`, `REJECT`, `DROP_NEWEST`, `DROP_OLDEST`. Domyślnie pozostaje `BLOCK`, zachowując dotychczasową semantykę zgodności API.
+- `scheduler_ipc_service_send_ex()` wykonuje próbę nieblokującą i odróżnia `DELIVERED`, `DELIVERED_DROPPED_OLDEST`, `BACKPRESSURE`, `DROPPED_NEWEST`, `SERVICE_NOT_FOUND`, `SERVICE_CLOSED` i błędne argumenty.
+- `scheduler_ipc_service_send_request_ex()` dostarcza tak samo jawny wynik dla żądań request/response.
+- Per-service info i globalne diagnostics raportują liczbę przyjętych/odebranych wiadomości, backpressure, odrzucenia, drops i największą obserwowaną głębokość kolejki.
+- QEMU test weryfikuje kolejki o stałej pojemności, wynik przepełnienia i właściwe ID wiadomości zachowane dla wszystkich czterech polityk.
+
+**Kontrakt dostarczenia:** `DELIVERED` oznacza, że wiadomość została atomowo przyjęta do kolejki. Nie stanowi potwierdzenia odebrania, przetworzenia ani trwałego zapisu; polityki DROP jawnie pozwalają na utratę wiadomości.
+
+Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Pojemność kanału nadal jest stała na poziomie czterech wiadomości.
