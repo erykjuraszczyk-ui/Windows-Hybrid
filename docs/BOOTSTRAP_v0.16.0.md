@@ -20,3 +20,7 @@ Test wypełnia kolejkę usługi, generuje dwa kolejne backpressure events, weryf
 - Interwał bazowy jest podwajany po każdym timerowym retry do limitu (z saturacją, bez overflow); deadline wygrywa, jeśli oba terminy się spotkają.
 - „Health” mierzy wyniki ścieżki nieblokującej IPC. Sukces oznacza przyjęcie do kolejki, nie dowód, że aplikacja wykonała efekt uboczny.
 - Ticki PIT nie są zegarem czasu rzeczywistego; statystyki są ulotne i lokalne dla jednordzeniowego kernela Ring 0.
+
+## Potwierdzenie CI
+
+Scalony commit v0.16.0 przeszedł GitHub Actions: [przebieg #40522608835](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40522608835). Log zawiera `IPC_CIRCUIT_BREAKER_SELFTEST_OK`, `IPC_DIAGNOSTICS_OK`, `BOOT_OK` i końcowy `PASS`.

@@ -190,7 +190,7 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 
 ## HYBRID OS v0.16.0 — IPC Retry Backoff, Circuit Breakers & Service Health Monitoring
 
-**Status: CI validation pending.** Nie oznaczaj tej wersji jako PASS, dopóki najnowszy przebieg GitHub Actions nie potwierdzi ISO oraz markera QEMU.
+**Status: CI PASS po scaleniu.** Przebieg [GitHub Actions #40522608835](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40522608835) zbudował ISO i zaliczył testy QEMU.
 
 - `scheduler_ipc_service_send_reliable_backoff()` wprowadza wykładnicze odstępy retry z wartością początkową i maksymalnym limitem; stare `scheduler_ipc_service_send_reliable_timed()` zachowuje stały interwał.
 - Circuit breaker jest konfigurowany per usługa (`failure_threshold`, `reset_timeout_ticks`). Stan `CLOSED` przepuszcza operacje, `OPEN` blokuje próby do końca cooldownu, a `HALF_OPEN` dopuszcza jedną próbę kontrolną.
