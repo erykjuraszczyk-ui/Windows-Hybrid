@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.11.0 — IPC Runtime, Pending Calls & Concurrent Reply Demultiplexing; **CI validation pending**.
+**Aktualny etap:** v0.12.0 — IPC Reliability & Service Lifecycle Core; **CI validation pending**.
 
 ## Historia statusu
 
@@ -14,6 +14,9 @@
 - **v0.7.0 — CI PASS w QEMU:** sleep, timeouty i anulowanie zadań oczekujących ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40338105255)).
 - **v0.8.0 — CI PASS po scaleniu:** semafory i ograniczone kanały IPC ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40348058541)).
 - **v0.9.0 — CI PASS po scaleniu:** rejestr usług IPC i routing wiadomości ([udany przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40350916069)).
+- **v0.10.0 — CI PASS po scaleniu:** wersjonowany request/response i service discovery.
+- **v0.11.0 — CI PASS po scaleniu:** pending-call runtime, timeouty, anulowanie i demultipleksowanie odpowiedzi.
+- **v0.12.0 — CI validation pending:** zamykanie usług, kończenie powiązanych wywołań i liczniki diagnostyczne.
 
 ## Potwierdzenie v0.5.0
 
