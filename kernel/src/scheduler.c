@@ -1699,6 +1699,9 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     channel->tail = (channel->tail + 1U) % SCHEDULER_IPC_CAPACITY;
     ++channel->count;
     scheduler_ipc_record_enqueue_locked(destination);
+    if (destination->congestion_control_enabled &&
+        channel->count >= destination->congestion_high_watermark)
+        destination->congested = true;
     if (channel->readers.waiters != 0U)
         (void)wait_queue_wake_one_locked(&channel->readers);
     scheduler_ipc_service_report_locked(destination, true, interrupts_ticks());
