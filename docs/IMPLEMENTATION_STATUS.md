@@ -173,3 +173,16 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 - Test QEMU pokrywa dostarczenie, ACK, suppress duplikatu, przepełnienie kolejki i wyczerpanie limitu prób.
 
 **Granice:** to niezawodność in-memory dla bieżącego jednordzeniowego kernela Ring 0. Retry uruchamia klient przez wywołanie API, nie timer ani automatyczna pętla. ACK jest obecnie prymitywem kernelowym, nie osobną wiadomością routowaną. Brak trwałości po restarcie, gwarancji exactly-once end-to-end i ochrony przed zawieszeniem/awarią odbiorcy po wykonaniu efektu ubocznego, a przed ACK.
+
+
+## HYBRID OS v0.15.0 — IPC Timer-Driven Retry, Delivery Deadlines & Dead-Letter Queue
+
+**Status: CI validation pending.** Nie oznaczaj wersji jako PASS, dopóki najnowszy przebieg GitHub Actions nie potwierdzi kompilacji ISO oraz markera QEMU.
+
+- `scheduler_ipc_service_send_reliable_timed()` pozwala podać interwał ponowień i deadline w tickach PIT; poprzednie `scheduler_ipc_service_send_reliable()` zachowuje kompatybilność i pozostaje ręcznie sterowane.
+- Ścieżka `scheduler_on_timer_interrupt()` obsługuje terminy także wtedy, gdy scheduler preempcji nie jest aktywny. Każdy tick skanuje ograniczoną tabelę dostaw; nie jest wymagana dynamiczna alokacja pamięci.
+- Deadline ma pierwszeństwo przed kolejną próbą. Po wygaśnięciu dostawa przechodzi do stanu `EXPIRED` i trafia do bounded dead-letter queue z receipt, oryginalną wiadomością, powodem oraz tickiem rejestracji.
+- Kolejka dead-letter ma stałą pojemność `SCHEDULER_IPC_DEAD_LETTER_CAPACITY`; w razie przepełnienia nadpisuje najstarszy wpis i zwiększa licznik `dead_letters_dropped`.
+- Diagnostyka raportuje automatyczne retry, wygasłe deadline’y, wpisy dead-letter oraz liczbę wpisów aktualnie oczekujących. Test QEMU sprawdza retry timera z tłumieniem duplikatów, ACK przed deadline’em, terminalne wygaśnięcie i odczyt dead-letter.
+
+**Semantyka:** ticki PIT są jednostką czasu kernela, nie zegarem czasu rzeczywistego. To mechanizm in-memory; DLQ i receipt giną po resecie. ACK nadal oznacza potwierdzenie przez usługę, a nie trwałość efektu ubocznego ani exactly-once.
