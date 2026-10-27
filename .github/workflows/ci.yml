@@ -25,7 +25,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v5
         with:
-          name: hybrid-os-v0.13.0
+          name: hybrid-os-v0.15.0
           path: |
             build/kernel.elf
             build/hybrid.iso
