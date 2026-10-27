@@ -1,4 +1,4 @@
-name: hybrid-os-v0.14.0
+name: hybrid-os-v0.15.0
 on:
   push:
     branches: [main, "feat/**"]
@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   boot-smoke-test:
-    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol, pending-call runtime, concurrent replies, service lifecycle, queue backpressure, delivery receipts, ACK, bounded retries and duplicate suppression in QEMU
+    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol, pending-call runtime, concurrent replies, service lifecycle, queue backpressure, delivery receipts, ACK, timer-driven retry, deadlines and dead-letter queue in QEMU
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
