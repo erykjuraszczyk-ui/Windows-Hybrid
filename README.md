@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.12.0 — IPC Reliability & Service Lifecycle Core; **CI validation pending**.
+**Aktualny etap:** v0.13.0 — IPC Backpressure, Queue Policies & Delivery Guarantees; **CI validation pending**.
 
 ## Historia statusu
 
@@ -124,3 +124,15 @@ See [HYBRID OS v0.10.0 guide](docs/BOOTSTRAP_v0.10.0.md). Required markers befor
 - QEMU regression test exercises simultaneous clients, out-of-order response/error replies, bad correlation IDs, timeout, explicit cancellation and dropped late replies.
 
 See [HYBRID OS v0.11.0 guide](docs/BOOTSTRAP_v0.11.0.md). Do not mark PASS until `HYBRID: IPC_RUNTIME_SELFTEST_OK` and `HYBRID: BOOT_OK` appear in the latest CI log.
+
+
+## HYBRID OS v0.13.0 — IPC Backpressure, Queue Policies & Delivery Guarantees
+
+**Status: CI validation pending.**
+
+- Dodaje polityki kolejek usług: `BLOCK` (dotychczasowe API czeka na miejsce), `REJECT`, `DROP_NEWEST` i `DROP_OLDEST`.
+- Nowe `scheduler_ipc_service_send_ex()` i `scheduler_ipc_service_send_request_ex()` są nieblokujące i zwracają jawny wynik dostarczenia, przeciążenia, odrzucenia albo niedostępności usługi.
+- Usługi raportują bieżącą głębokość kolejki, high-water mark oraz liczniki dostarczonych, odebranych i utraconych wiadomości.
+- QEMU test weryfikuje pełną kolejkę dla wszystkich polityk oraz dokładną sekwencję odebranych identyfikatorów wiadomości.
+
+Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie jej obsłużenia przez odbiorcę ani trwałego zapisu. Szczegóły: [przewodnik v0.13.0](docs/BOOTSTRAP_v0.13.0.md).
