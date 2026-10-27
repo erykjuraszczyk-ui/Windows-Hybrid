@@ -43,11 +43,35 @@ typedef enum {
     SCHEDULER_IPC_STATUS_BUSY = 4U,
     SCHEDULER_IPC_STATUS_INTERNAL = 5U
 } scheduler_ipc_status_t;
+typedef enum {
+    SCHEDULER_IPC_QUEUE_BLOCK = 0U,
+    SCHEDULER_IPC_QUEUE_REJECT = 1U,
+    SCHEDULER_IPC_QUEUE_DROP_NEWEST = 2U,
+    SCHEDULER_IPC_QUEUE_DROP_OLDEST = 3U
+} scheduler_ipc_queue_policy_t;
+typedef enum {
+    SCHEDULER_IPC_DELIVERY_DELIVERED = 0U,
+    SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST = 1U,
+    SCHEDULER_IPC_DELIVERY_BACKPRESSURE = 2U,
+    SCHEDULER_IPC_DELIVERY_DROPPED_NEWEST = 3U,
+    SCHEDULER_IPC_DELIVERY_SERVICE_NOT_FOUND = 4U,
+    SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED = 5U,
+    SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT = 6U,
+    SCHEDULER_IPC_DELIVERY_INTERNAL_ERROR = 7U
+} scheduler_ipc_delivery_result_t;
 typedef struct {
     scheduler_ipc_service_id_t id;
     uint32_t capabilities;
     uint32_t queued_messages;
     uint32_t queue_capacity;
+    scheduler_ipc_queue_policy_t queue_policy;
+    uint32_t queue_high_watermark;
+    uint64_t messages_enqueued;
+    uint64_t messages_received;
+    uint64_t backpressure_events;
+    uint64_t messages_dropped_newest;
+    uint64_t messages_dropped_oldest;
+    uint64_t messages_rejected_full;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
 } scheduler_ipc_service_info_t;
 typedef struct {
@@ -69,6 +93,14 @@ typedef struct {
     uint64_t calls_send_failed;
     uint64_t replies_dropped;
     uint64_t services_closed;
+    uint64_t messages_enqueued;
+    uint64_t messages_received;
+    uint64_t backpressure_events;
+    uint64_t messages_dropped_newest;
+    uint64_t messages_dropped_oldest;
+    uint64_t messages_rejected_full;
+    uint64_t delivery_failures;
+    uint32_t max_queue_depth;
     uint32_t pending_calls;
     uint32_t active_services;
 } scheduler_ipc_diagnostics_t;
@@ -132,7 +164,14 @@ bool scheduler_ipc_service_lookup(const char *name, scheduler_ipc_service_id_t *
 bool scheduler_ipc_service_enumerate(uint32_t active_index, scheduler_ipc_service_info_t *info);
 bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
                                     scheduler_ipc_service_info_t *info);
+bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_id,
+                                             scheduler_ipc_queue_policy_t policy);
 bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id);
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id,
+    const scheduler_ipc_message_t *message);
 bool scheduler_ipc_service_send(scheduler_ipc_service_id_t source_service_id,
                                 scheduler_ipc_service_id_t destination_service_id,
                                 uint32_t request_id,
@@ -143,6 +182,11 @@ bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_servic
                                         scheduler_ipc_service_id_t destination_service_id,
                                         uint32_t request_id,
                                         const scheduler_ipc_message_t *request);
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_request_ex(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id,
+    const scheduler_ipc_message_t *request);
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
                                  const scheduler_ipc_message_t *request,
                                  const scheduler_ipc_message_t *response,
@@ -162,6 +206,7 @@ uint32_t scheduler_ipc_pending_call_count(void);
 void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics);
 bool scheduler_ipc_runtime_self_test(void);
 bool scheduler_ipc_lifecycle_self_test(void);
+bool scheduler_ipc_backpressure_self_test(void);
 
 bool scheduler_ipc_service_self_test(void);
 bool scheduler_ipc_request_response_discovery_self_test(void);
