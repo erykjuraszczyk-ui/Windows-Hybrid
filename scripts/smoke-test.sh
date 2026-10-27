@@ -45,6 +45,7 @@ required_markers=(
   "HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK"
   "HYBRID: IPC_RUNTIME_SELFTEST_OK"
   "HYBRID: IPC_LIFECYCLE_SELFTEST_OK"
+  "HYBRID: IPC_BACKPRESSURE_SELFTEST_OK"
   "HYBRID: IPC_DIAGNOSTICS_OK"
   "HYBRID: BOOT_OK"
 )
@@ -56,4 +57,4 @@ for marker in "${required_markers[@]}"; do
     exit 1
   fi
 done
-echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timers, semaphores, IPC services, request/response correlation, pending calls, concurrent replies, service lifecycle cancellation and IPC diagnostics passed in QEMU."
+echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timers, semaphores, IPC services, request/response, pending calls, lifecycle shutdown, queue backpressure policies and delivery diagnostics passed in QEMU."

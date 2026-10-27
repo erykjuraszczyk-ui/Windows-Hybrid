@@ -25,7 +25,8 @@
 | v0.9.0 | Rejestr nazwanych usług, routing wiadomości, request IDs i bezpieczne wyrejestrowanie; CI PASS po scaleniu |
 | v0.10.0 | Wersjonowany request/response, typowane błędy i service discovery; CI PASS po scaleniu |
 | v0.11.0 | IPC runtime, pending-call table, timeout/anulowanie oraz concurrent reply demultiplexing; CI PASS po scaleniu |
-| v0.12.0 | IPC reliability: zamykanie usług, anulowanie powiązanych wywołań i diagnostyka lifecycle/timeoutów/dropów; CI wymagane |
+| v0.12.0 | IPC reliability: zamykanie usług, anulowanie powiązanych wywołań i diagnostyka lifecycle/timeoutów/dropów; CI PASS po scaleniu |
+| v0.13.0 | IPC backpressure: BLOCK/REJECT/DROP_NEWEST/DROP_OLDEST, nieblokujące wyniki dostarczania, liczniki i QEMU regression test; CI wymagane |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
