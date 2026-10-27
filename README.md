@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.14.0 — IPC Delivery Receipts, Acknowledgements & Retry Core; **CI validation pending**.
+**Aktualny etap:** v0.14.0 — IPC Delivery Receipts, Acknowledgements & Retry Core; **CI PASS po scaleniu** ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40509463072)).
 
 ## Historia statusu
 
@@ -17,7 +17,7 @@
 - **v0.10.0 — CI PASS po scaleniu:** wersjonowany request/response i service discovery.
 - **v0.11.0 — CI PASS po scaleniu:** pending-call runtime, timeouty, anulowanie i demultipleksowanie odpowiedzi.
 - **v0.13.0 — CI PASS na gałęzi funkcji:** polityki backpressure i diagnostyka kolejek ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40489874343)).
-- **v0.14.0 — CI validation pending:** potwierdzenia dostarczenia, jawny ACK, ograniczone retry i tłumienie duplikatów.
+- **v0.14.0 — CI PASS po scaleniu:** potwierdzenia dostarczenia, jawny ACK, ograniczone retry i tłumienie duplikatów ([QEMU regression](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40509463072)).
 - **v0.12.0 — CI validation pending:** zamykanie usług, kończenie powiązanych wywołań i liczniki diagnostyczne.
 
 ## Potwierdzenie v0.5.0
