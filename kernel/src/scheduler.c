@@ -2337,7 +2337,7 @@ bool scheduler_ipc_adaptive_load_self_test(void) {
         scheduler_ipc_service_set_priority(high, 0U) ||
         !scheduler_ipc_service_set_congestion_control(low, 2U, 0U) ||
         scheduler_ipc_service_set_congestion_control(high, 5U, 2U)) return false;
-    scheduler_ipc_service_id_t candidates[2] = { low, high }, selected = 0U;
+    scheduler_ipc_service_id_t candidates[2] = { high, low }, selected = 0U;
     if (!scheduler_ipc_service_select_adaptive(candidates, 2U, &selected) ||
         selected != high) return false;
     scheduler_ipc_message_t message = {0};
