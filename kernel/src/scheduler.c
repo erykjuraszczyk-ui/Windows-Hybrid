@@ -991,6 +991,8 @@ typedef struct {
 
 typedef struct {
     bool valid;
+    bool timer_driven;
+    bool dead_lettered;
     scheduler_ipc_delivery_receipt_t receipt;
     scheduler_ipc_message_t message;
 } scheduler_ipc_delivery_track_t;
@@ -1011,6 +1013,13 @@ static uint64_t ipc_diag_deliveries_acknowledged;
 static uint64_t ipc_diag_delivery_retry_attempts;
 static uint64_t ipc_diag_delivery_retries_exhausted;
 static uint64_t ipc_diag_duplicate_deliveries_suppressed;
+static uint64_t ipc_diag_automatic_retry_attempts;
+static uint64_t ipc_diag_delivery_deadlines_expired;
+static uint64_t ipc_diag_dead_letters_enqueued;
+static uint64_t ipc_diag_dead_letters_dropped;
+static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
+static uint32_t ipc_dead_letter_head;
+static uint32_t ipc_dead_letter_count;
 
 
 static uint32_t scheduler_ipc_name_length(const char *name) {
@@ -1359,6 +1368,32 @@ static bool scheduler_ipc_delivery_already_seen_locked(
            scheduler_ipc_service_has_received_delivery_locked(service, delivery_id);
 }
 
+static uint64_t scheduler_ipc_tick_add_saturating(uint64_t tick, uint64_t delta) {
+    return UINT64_MAX - tick < delta ? UINT64_MAX : tick + delta;
+}
+
+/* Caller holds local interrupt exclusion; the queue is intentionally bounded. */
+static void scheduler_ipc_dead_letter_enqueue_locked(
+    scheduler_ipc_delivery_track_t *track,
+    scheduler_ipc_delivery_result_t reason, uint64_t now) {
+    if (track == NULL || !track->valid || track->dead_lettered) return;
+    if (ipc_dead_letter_count == SCHEDULER_IPC_DEAD_LETTER_CAPACITY) {
+        ipc_dead_letter_head = (ipc_dead_letter_head + 1U) % SCHEDULER_IPC_DEAD_LETTER_CAPACITY;
+        --ipc_dead_letter_count;
+        ++ipc_diag_dead_letters_dropped;
+    }
+    const uint32_t index = (ipc_dead_letter_head + ipc_dead_letter_count) %
+                           SCHEDULER_IPC_DEAD_LETTER_CAPACITY;
+    ipc_dead_letters[index].receipt = track->receipt;
+    ipc_dead_letters[index].receipt.last_result = reason;
+    scheduler_ipc_message_copy(&ipc_dead_letters[index].message, &track->message);
+    ipc_dead_letters[index].reason = reason;
+    ipc_dead_letters[index].recorded_tick = now;
+    ++ipc_dead_letter_count;
+    ++ipc_diag_dead_letters_enqueued;
+    track->dead_lettered = true;
+}
+
 scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     scheduler_ipc_service_id_t source_service_id,
     scheduler_ipc_service_id_t destination_service_id,
@@ -1506,13 +1541,15 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
 
 /* Bounded in-memory delivery tracking. ACK must follow receiver-side processing;
  * receipts are not persistent across reboot. */
-scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
     scheduler_ipc_service_id_t source_service_id,
     scheduler_ipc_service_id_t destination_service_id,
     uint32_t delivery_id, uint32_t request_id,
-    const scheduler_ipc_message_t *message, uint32_t max_attempts) {
+    const scheduler_ipc_message_t *message, uint32_t max_attempts,
+    uint64_t retry_interval_ticks, uint64_t deadline_ticks) {
     if (source_service_id == 0U || destination_service_id == 0U ||
         delivery_id == 0U || request_id == 0U || max_attempts == 0U ||
+        ((retry_interval_ticks == 0U) != (deadline_ticks == 0U)) ||
         !scheduler_ipc_message_valid(message))
         return SCHEDULER_IPC_DELIVERY_INVALID_ARGUMENT;
 
@@ -1543,6 +1580,14 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
     slot->receipt.destination_service_id = destination_service_id;
     slot->receipt.request_id = request_id;
     slot->receipt.last_result = SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
+    slot->receipt.retry_interval_ticks = retry_interval_ticks;
+    const uint64_t now = interrupts_ticks();
+    slot->receipt.deadline_tick = deadline_ticks == 0U ? 0U :
+        scheduler_ipc_tick_add_saturating(now, deadline_ticks);
+    slot->receipt.next_retry_tick = retry_interval_ticks == 0U ? 0U :
+        scheduler_ipc_tick_add_saturating(now, retry_interval_ticks);
+    slot->timer_driven = retry_interval_ticks != 0U;
+    slot->dead_lettered = false;
     scheduler_ipc_message_copy(&slot->message, message);
     slot->message.delivery_id = delivery_id;
     ++ipc_diag_deliveries_started;
@@ -1566,9 +1611,22 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
             current->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
             ++ipc_diag_delivery_retries_exhausted;
         }
+        if (current->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_FAILED ||
+            current->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED)
+            scheduler_ipc_dead_letter_enqueue_locked(current, current->receipt.last_result,
+                                                      interrupts_ticks());
     }
     scheduler_irq_restore(finish_flags);
     return result;
+}
+
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t delivery_id, uint32_t request_id,
+    const scheduler_ipc_message_t *message, uint32_t max_attempts) {
+    return scheduler_ipc_service_send_reliable_timed(source_service_id,
+        destination_service_id, delivery_id, request_id, message, max_attempts, 0U, 0U);
 }
 
 bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_service_id,
@@ -1616,6 +1674,8 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
         track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED;
         track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
         ++ipc_diag_delivery_retries_exhausted;
+        scheduler_ipc_dead_letter_enqueue_locked(track, SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED,
+                                                  interrupts_ticks());
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
     }
@@ -1653,6 +1713,10 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
             track->receipt.last_result = SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED;
             ++ipc_diag_delivery_retries_exhausted;
         }
+        if (track->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_FAILED ||
+            track->receipt.state == SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED)
+            scheduler_ipc_dead_letter_enqueue_locked(track, track->receipt.last_result,
+                                                      interrupts_ticks());
     }
     scheduler_irq_restore(finish_flags);
     if (result != SCHEDULER_IPC_DELIVERY_DELIVERED &&
@@ -1689,6 +1753,60 @@ uint32_t scheduler_ipc_delivery_pending_count(void) {
             ++count;
     scheduler_irq_restore(flags);
     return count;
+}
+
+uint32_t scheduler_ipc_dead_letter_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t count = ipc_dead_letter_count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
+bool scheduler_ipc_dead_letter_receive(scheduler_ipc_dead_letter_t *entry) {
+    if (entry == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (ipc_dead_letter_count == 0U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    *entry = ipc_dead_letters[ipc_dead_letter_head];
+    ipc_dead_letters[ipc_dead_letter_head].receipt.delivery_id = 0U;
+    ipc_dead_letters[ipc_dead_letter_head].message.delivery_id = 0U;
+    ipc_dead_letter_head = (ipc_dead_letter_head + 1U) % SCHEDULER_IPC_DEAD_LETTER_CAPACITY;
+    --ipc_dead_letter_count;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+static void scheduler_ipc_process_delivery_timers(uint64_t now) {
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_TRACKED_DELIVERIES; ++i) {
+        uint32_t delivery_id = 0U;
+        const uint64_t flags = scheduler_irq_save_disable();
+        scheduler_ipc_delivery_track_t *track = &ipc_delivery_tracks[i];
+        if (!track->valid || !track->timer_driven ||
+            track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
+            scheduler_irq_restore(flags);
+            continue;
+        }
+        if (track->receipt.deadline_tick != 0U && now >= track->receipt.deadline_tick) {
+            track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXPIRED;
+            track->receipt.last_result = SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED;
+            ++ipc_diag_delivery_deadlines_expired;
+            scheduler_ipc_dead_letter_enqueue_locked(track,
+                SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED, now);
+            scheduler_irq_restore(flags);
+            continue;
+        }
+        if (track->receipt.next_retry_tick != 0U && now >= track->receipt.next_retry_tick &&
+            track->receipt.attempts < track->receipt.max_attempts) {
+            delivery_id = track->receipt.delivery_id;
+            track->receipt.next_retry_tick = scheduler_ipc_tick_add_saturating(
+                now, track->receipt.retry_interval_ticks);
+            ++ipc_diag_automatic_retry_attempts;
+        }
+        scheduler_irq_restore(flags);
+        if (delivery_id != 0U) (void)scheduler_ipc_delivery_retry(delivery_id);
+    }
 }
 
 bool scheduler_ipc_receipt_retry_self_test(void) {
@@ -1806,6 +1924,109 @@ bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_servic
     /* Keep legacy BLOCK behavior for the old API. The *_ex API is always nonblocking. */
     return scheduler_ipc_service_send(source_service_id, destination_service_id,
                                       request_id, &message);
+}
+
+
+bool scheduler_ipc_timer_retry_dead_letter_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U ||
+        scheduler_ipc_delivery_pending_count() != 0U) return false;
+
+    bool prior_exhaustion_seen = false;
+    scheduler_ipc_dead_letter_t letter = {0};
+    while (scheduler_ipc_dead_letter_receive(&letter)) {
+        if (letter.receipt.delivery_id == UINT32_C(0x14000102) &&
+            letter.reason == SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED)
+            prior_exhaustion_seen = true;
+    }
+    if (!prior_exhaustion_seen) return false;
+
+    scheduler_ipc_service_id_t source_id = 0U, destination_id = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("retry.timer.src", caps, &source_id) ||
+        !scheduler_ipc_service_register_ex("retry.timer.dst", caps, &destination_id))
+        return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x54494D52);
+    message.length = 2U;
+    message.payload[0] = UINT8_C(0xA5);
+    message.payload[1] = UINT8_C(0x5A);
+    scheduler_ipc_diagnostics_t before = {0}, after = {0};
+    scheduler_ipc_get_diagnostics(&before);
+
+    const uint32_t good_id = UINT32_C(0x15000101);
+    if (scheduler_ipc_service_send_reliable_timed(source_id, destination_id,
+            good_id, 51U, &message, 5U, 2U, 12U) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    scheduler_ipc_delivery_receipt_t receipt = {0};
+    if (!scheduler_ipc_delivery_get_receipt(good_id, &receipt) ||
+        receipt.deadline_tick == 0U || receipt.retry_interval_ticks != 2U ||
+        receipt.next_retry_tick == 0U) return false;
+
+    interrupts_enable();
+    const bool retry_waited = interrupts_wait_for_ticks(receipt.next_retry_tick + 1U);
+    interrupts_disable();
+    if (!retry_waited ||
+        !scheduler_ipc_delivery_get_receipt(good_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING ||
+        receipt.attempts < 2U) return false;
+
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(destination_id, &received) ||
+        received.delivery_id != good_id ||
+        received.payload[0] != UINT8_C(0xA5) ||
+        received.payload[1] != UINT8_C(0x5A) ||
+        !scheduler_ipc_service_ack_delivery(destination_id, good_id) ||
+        !scheduler_ipc_delivery_get_receipt(good_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED) return false;
+
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
+        scheduler_ipc_message_t filler = {0};
+        filler.type = UINT32_C(0x444C5146);
+        filler.length = 1U;
+        filler.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source_id, destination_id, 800U + i,
+                &filler) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    const uint32_t expired_id = UINT32_C(0x15000102);
+    if (scheduler_ipc_service_send_reliable_timed(source_id, destination_id,
+            expired_id, 52U, &message, 10U, 1U, 4U) !=
+            SCHEDULER_IPC_DELIVERY_BACKPRESSURE ||
+        !scheduler_ipc_delivery_get_receipt(expired_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING) return false;
+
+    const uint64_t deadline_target = receipt.deadline_tick + 1U;
+    interrupts_enable();
+    const bool deadline_waited = interrupts_wait_for_ticks(deadline_target);
+    interrupts_disable();
+    if (!deadline_waited ||
+        !scheduler_ipc_delivery_get_receipt(expired_id, &receipt) ||
+        receipt.state != SCHEDULER_IPC_DELIVERY_STATE_EXPIRED ||
+        receipt.last_result != SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED ||
+        scheduler_ipc_dead_letter_count() != 1U) return false;
+
+    bool expired_letter_seen = false;
+    if (scheduler_ipc_dead_letter_receive(&letter) &&
+        letter.receipt.delivery_id == expired_id &&
+        letter.reason == SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED &&
+        letter.message.delivery_id == expired_id &&
+        letter.recorded_tick >= receipt.deadline_tick)
+        expired_letter_seen = true;
+    if (!expired_letter_seen || scheduler_ipc_dead_letter_count() != 0U) return false;
+
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i)
+        if (!scheduler_ipc_service_receive(destination_id, &received)) return false;
+    scheduler_ipc_get_diagnostics(&after);
+    const bool diagnostics_ok =
+        after.automatic_retry_attempts >= before.automatic_retry_attempts + 1U &&
+        after.delivery_deadlines_expired == before.delivery_deadlines_expired + 1U &&
+        after.dead_letters_enqueued >= before.dead_letters_enqueued + 1U &&
+        after.dead_letters_pending == 0U &&
+        scheduler_ipc_delivery_pending_count() == 0U;
+    const bool unregistered = scheduler_ipc_service_unregister(destination_id) &&
+        scheduler_ipc_service_unregister(source_id) &&
+        scheduler_ipc_service_count() == 0U;
+    return diagnostics_ok && unregistered;
 }
 
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
@@ -2138,6 +2359,11 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->delivery_retry_attempts = ipc_diag_delivery_retry_attempts;
     diagnostics->delivery_retries_exhausted = ipc_diag_delivery_retries_exhausted;
     diagnostics->duplicate_deliveries_suppressed = ipc_diag_duplicate_deliveries_suppressed;
+    diagnostics->automatic_retry_attempts = ipc_diag_automatic_retry_attempts;
+    diagnostics->delivery_deadlines_expired = ipc_diag_delivery_deadlines_expired;
+    diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
+    diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
+    diagnostics->dead_letters_pending = ipc_dead_letter_count;
     diagnostics->pending_deliveries = 0U;
     diagnostics->max_queue_depth = ipc_diag_max_queue_depth;
     diagnostics->pending_calls = 0U;
@@ -2917,7 +3143,9 @@ bool scheduler_ipc_request_response_discovery_self_test(void) {
 }
 
 void *scheduler_on_timer_interrupt(void *interrupt_frame) {
-    if (!preemptive_active || interrupt_frame == NULL) return interrupt_frame;
+    if (interrupt_frame == NULL) return interrupt_frame;
+    scheduler_ipc_process_delivery_timers(interrupts_ticks());
+    if (!preemptive_active) return interrupt_frame;
     uint32_t previous = current_task_index;
     if (bootstrap_frame == NULL) {
         bootstrap_frame = interrupt_frame;

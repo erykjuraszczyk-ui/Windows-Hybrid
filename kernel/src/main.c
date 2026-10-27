@@ -353,6 +353,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: IPC_RECEIPTS_RETRIES_SELFTEST_OK\n");
+    if (!scheduler_ipc_timer_retry_dead_letter_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_TIMER_RETRY_DEAD_LETTER\n");
+        return;
+    }
+    serial_write("HYBRID: IPC_TIMER_RETRY_DEAD_LETTER_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||
