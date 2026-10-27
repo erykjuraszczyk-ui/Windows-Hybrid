@@ -23,6 +23,7 @@ typedef enum {
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
 #define SCHEDULER_IPC_MAX_TRACKED_DELIVERIES 8U
 #define SCHEDULER_IPC_DELIVERY_HISTORY 16U
+#define SCHEDULER_IPC_DEAD_LETTER_CAPACITY 8U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
 #define SCHEDULER_IPC_PROTOCOL_VERSION 1U
 #define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
@@ -65,14 +66,16 @@ typedef enum {
     SCHEDULER_IPC_DELIVERY_RETRY_EXHAUSTED = 9U,
     SCHEDULER_IPC_DELIVERY_ALREADY_ACKNOWLEDGED = 10U,
     SCHEDULER_IPC_DELIVERY_TRACKING_CAPACITY = 11U,
-    SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED = 12U
+    SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED = 12U,
+    SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED = 13U
 } scheduler_ipc_delivery_result_t;
 typedef enum {
     SCHEDULER_IPC_DELIVERY_STATE_FREE = 0U,
     SCHEDULER_IPC_DELIVERY_STATE_PENDING = 1U,
     SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED = 2U,
     SCHEDULER_IPC_DELIVERY_STATE_EXHAUSTED = 3U,
-    SCHEDULER_IPC_DELIVERY_STATE_FAILED = 4U
+    SCHEDULER_IPC_DELIVERY_STATE_FAILED = 4U,
+    SCHEDULER_IPC_DELIVERY_STATE_EXPIRED = 5U
 } scheduler_ipc_delivery_state_t;
 typedef struct {
     uint32_t delivery_id;
@@ -83,6 +86,9 @@ typedef struct {
     scheduler_ipc_service_id_t destination_service_id;
     uint32_t request_id;
     scheduler_ipc_delivery_result_t last_result;
+    uint64_t deadline_tick;
+    uint64_t retry_interval_ticks;
+    uint64_t next_retry_tick;
 } scheduler_ipc_delivery_receipt_t;
 typedef struct {
     scheduler_ipc_service_id_t id;
@@ -111,6 +117,12 @@ typedef struct {
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
 typedef struct {
+    scheduler_ipc_delivery_receipt_t receipt;
+    scheduler_ipc_message_t message;
+    scheduler_ipc_delivery_result_t reason;
+    uint64_t recorded_tick;
+} scheduler_ipc_dead_letter_t;
+typedef struct {
     uint64_t calls_started;
     uint64_t calls_completed;
     uint64_t calls_timed_out;
@@ -131,6 +143,11 @@ typedef struct {
     uint64_t delivery_retry_attempts;
     uint64_t delivery_retries_exhausted;
     uint64_t duplicate_deliveries_suppressed;
+    uint64_t automatic_retry_attempts;
+    uint64_t delivery_deadlines_expired;
+    uint64_t dead_letters_enqueued;
+    uint64_t dead_letters_dropped;
+    uint32_t dead_letters_pending;
     uint32_t pending_deliveries;
     uint32_t max_queue_depth;
     uint32_t pending_calls;
@@ -224,6 +241,15 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable(
     scheduler_ipc_service_id_t destination_service_id,
     uint32_t delivery_id, uint32_t request_id,
     const scheduler_ipc_message_t *message, uint32_t max_attempts);
+scheduler_ipc_delivery_result_t scheduler_ipc_service_send_reliable_timed(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t delivery_id, uint32_t request_id,
+    const scheduler_ipc_message_t *message, uint32_t max_attempts,
+    uint64_t retry_interval_ticks, uint64_t deadline_ticks);
+uint32_t scheduler_ipc_dead_letter_count(void);
+bool scheduler_ipc_dead_letter_receive(scheduler_ipc_dead_letter_t *entry);
+bool scheduler_ipc_timer_retry_dead_letter_self_test(void);
 bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_service_id,
                                         uint32_t delivery_id);
 scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_id);
