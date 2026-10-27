@@ -28,6 +28,7 @@
 | v0.12.0 | IPC reliability: zamykanie usług, anulowanie powiązanych wywołań i diagnostyka lifecycle/timeoutów/dropów; CI PASS po scaleniu |
 | v0.13.0 | IPC backpressure: BLOCK/REJECT/DROP_NEWEST/DROP_OLDEST, nieblokujące wyniki dostarczania, liczniki i QEMU regression test; CI PASS na gałęzi funkcji |
 | v0.14.0 | IPC delivery receipts, jawne ACK, limitowane retry, ochrona przed duplikatami i diagnostyka; CI PASS po scaleniu |
+| v0.15.0 | Retry sterowane tickami PIT, terminy dostaw, ograniczona dead-letter queue i testy QEMU; walidacja w toku |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
