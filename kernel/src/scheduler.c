@@ -1481,9 +1481,26 @@ bool scheduler_ipc_service_send_request(scheduler_ipc_service_id_t source_servic
                                         scheduler_ipc_service_id_t destination_service_id,
                                         uint32_t request_id,
                                         const scheduler_ipc_message_t *request) {
-    return scheduler_ipc_delivery_accepted(
-        scheduler_ipc_service_send_request_ex(source_service_id, destination_service_id,
-                                              request_id, request));
+    if (request_id == 0U || !scheduler_ipc_message_valid(request)) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(destination_service_id);
+    const bool allowed = source != NULL && destination != NULL &&
+        !source->closing && !destination->closing &&
+        (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
+        (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
+    scheduler_irq_restore(flags);
+    if (!allowed) return false;
+
+    scheduler_ipc_message_t message;
+    scheduler_ipc_message_copy(&message, request);
+    message.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+    message.kind = SCHEDULER_IPC_KIND_REQUEST;
+    message.status = SCHEDULER_IPC_STATUS_OK;
+    /* Keep legacy BLOCK behavior for the old API. The *_ex API is always nonblocking. */
+    return scheduler_ipc_service_send(source_service_id, destination_service_id,
+                                      request_id, &message);
 }
 
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
