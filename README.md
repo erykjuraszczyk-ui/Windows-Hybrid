@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.10.0 — IPC Request/Response Protocol & Service Discovery; **CI validation pending**.
+**Aktualny etap:** v0.11.0 — IPC Runtime, Pending Calls & Concurrent Reply Demultiplexing; **CI validation pending**.
 
 ## Historia statusu
 
@@ -107,3 +107,17 @@ See [HYBRID OS v0.9.0 guide](docs/BOOTSTRAP_v0.9.0.md). Confirmed markers: `HYBR
 - QEMU test exercises OK and UNSUPPORTED replies, request correlation, bad IDs/versions/kinds, duplicate/case-sensitive names and service discovery/cleanup.
 
 See [HYBRID OS v0.10.0 guide](docs/BOOTSTRAP_v0.10.0.md). Required markers before PASS: `HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK` and `HYBRID: BOOT_OK`.
+
+
+## HYBRID OS v0.11.0 — IPC Runtime, Pending Calls & Concurrent Reply Demultiplexing
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Adds a bounded kernel-side pending-call table with generated non-zero request IDs.
+- Adds `scheduler_ipc_service_call()`: register the pending request, send it, block the caller until a matching response/error, or return false on timeout/cancellation.
+- Routes replies by the tuple (requester service ID, responder service ID, request ID) to the original caller instead of enqueueing them into the shared service receive queue.
+- Serializes reply delivery, timeout and cancellation with interrupt exclusion; late and mismatched replies are dropped instead of being delivered to a later call.
+- Preserves legacy send-request/receive/reply APIs when no runtime pending call matches.
+- QEMU regression test exercises simultaneous clients, out-of-order response/error replies, bad correlation IDs, timeout, explicit cancellation and dropped late replies.
+
+See [HYBRID OS v0.11.0 guide](docs/BOOTSTRAP_v0.11.0.md). Do not mark PASS until `HYBRID: IPC_RUNTIME_SELFTEST_OK` and `HYBRID: BOOT_OK` appear in the latest CI log.

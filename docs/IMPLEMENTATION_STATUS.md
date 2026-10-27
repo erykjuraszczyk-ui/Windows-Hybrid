@@ -103,7 +103,9 @@ Potwierdzone markery: `HYBRID: IPC_SERVICES_SELFTEST_OK` i `HYBRID: BOOT_OK`. Fu
 
 ## HYBRID OS v0.10.0 — IPC Request/Response Protocol & Service Discovery
 
-**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+**Status: CI PASS w QEMU.**
+
+Potwierdzający przebieg: https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40354869320
 
 - Protokół wiadomości v1 zawiera `protocol_version`, `kind`, `status`, `source_service_id` i `request_id` oraz typ i payload. Typy: DATA, REQUEST, RESPONSE, ERROR i EVENT.
 - `scheduler_ipc_service_send_request()` wymaga niezerowego request ID oraz uprawnień capability REQUEST_RESPONSE u źródła i celu. `scheduler_ipc_service_reply()` sprawdza, czy wejście jest żądaniem protokołu v1, zachowuje request ID i zwraca RESPONSE dla OK lub ERROR dla statusu niezerowego.
@@ -113,3 +115,19 @@ Potwierdzone markery: `HYBRID: IPC_SERVICES_SELFTEST_OK` i `HYBRID: BOOT_OK`. Fu
 - Test QEMU pokrywa odpowiedź OK, odpowiedź błędną UNSUPPORTED, zgodność/niezgodność request ID, błędną wersję i rodzaj wiadomości, enumerację, duplicate/case-sensitive lookup oraz czyszczenie usług.
 
 Wymagane markery: `HYBRID: IPC_REQUEST_RESPONSE_SELFTEST_OK` i `HYBRID: BOOT_OK`. CI musi przejść dla najnowszej wersji źródeł przed zatwierdzeniem. Prototyp pozostaje single-core Ring 0, bez ACL, Ring 3, SMP, timeoutów request/reply i tablicy pending-call zarządzanej przez kernel.
+
+
+## HYBRID OS v0.11.0 — IPC Runtime, Pending Calls & Concurrent Reply Demultiplexing
+
+**Status: implementation committed on a feature branch; QEMU CI validation pending.**
+
+- Adds a bounded table of eight pending calls. The kernel generates monotonically increasing, non-zero request IDs and stops allocating IDs if the 32-bit counter exhausts rather than reusing identifiers.
+- `scheduler_ipc_service_call()` atomically reserves a pending entry, pins requester/responder service references, sends a version-1 request and blocks the calling preemptive task until a reply, timeout or cancellation.
+- `scheduler_ipc_service_reply()` routes a matching response/error to the task waiting on that exact requester/responder/request-ID tuple. Concurrent replies can arrive out of order without being mixed into the shared service receive queue.
+- Timeouts/cancellation mark the call stale, unblock the owner and record a bounded recent-expiration history. Late replies are dropped, not enqueued for subsequent calls. Wrong IDs are rejected while a matching service pair has pending calls.
+- Existing low-level send-request/service-receive APIs remain available for legacy callers without a registered runtime pending call.
+- QEMU regression test launches two concurrent clients, replies in reverse order with one OK response and one typed error, injects a wrong correlation ID, then exercises a timed-out call and an explicitly cancelled call whose late reply must be dropped.
+
+Required markers: `HYBRID: IPC_RUNTIME_SELFTEST_OK` and `HYBRID: BOOT_OK`. Status must remain pending until the latest source revision passes the QEMU smoke test.
+
+Limitations: single-core Ring 0 prototype; no SMP safety, Ring 3 isolation, server-level authentication, call priorities or retry policy. The expiration history is bounded; this is an internal runtime primitive, not a distributed RPC guarantee.

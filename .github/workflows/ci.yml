@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   boot-smoke-test:
-    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol and service discovery in QEMU
+    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol, pending-call runtime and concurrent reply demultiplexing in QEMU
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -25,7 +25,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v5
         with:
-          name: hybrid-os-v0.10.0
+          name: hybrid-os-v0.11.0
           path: |
             build/kernel.elf
             build/hybrid.iso

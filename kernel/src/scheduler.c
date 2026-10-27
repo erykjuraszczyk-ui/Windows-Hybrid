@@ -6,6 +6,27 @@
 #include <stdint.h>
 
 typedef struct {
+    bool active;
+    bool completed;
+    bool expired;
+    bool cancelled;
+    bool waiting;
+    scheduler_ipc_service_id_t source_service_id;
+    scheduler_ipc_service_id_t destination_service_id;
+    uint32_t request_id;
+    uint32_t owner_task_index;
+    scheduler_wait_queue_t waiters;
+    scheduler_ipc_message_t response;
+} scheduler_ipc_pending_call_t;
+
+typedef struct {
+    bool valid;
+    scheduler_ipc_service_id_t source_service_id;
+    scheduler_ipc_service_id_t destination_service_id;
+    uint32_t request_id;
+} scheduler_ipc_expired_call_t;
+
+typedef struct {
     scheduler_task_id_t id;
     volatile scheduler_task_state_t state;
     scheduler_step_fn step;
@@ -20,6 +41,12 @@ typedef struct {
 } scheduler_task_t;
 
 static scheduler_task_t task_table[SCHEDULER_MAX_TASKS];
+static scheduler_ipc_pending_call_t ipc_pending_calls[SCHEDULER_IPC_MAX_PENDING_CALLS];
+#define SCHEDULER_IPC_EXPIRED_HISTORY 16U
+static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
+static uint32_t ipc_expired_history_cursor;
+static uint32_t next_ipc_runtime_request_id = 1U;
+static void scheduler_ipc_pending_owner_cancel_locked(uint32_t owner_index);
 static uint32_t scheduler_cursor;
 static uint32_t next_task_id;
 static bool dispatch_in_progress;
@@ -351,6 +378,47 @@ static void scheduler_remove_waiter_locked(uint32_t index) {
     }
 }
 
+static void scheduler_ipc_expired_record_locked(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id) {
+    if (source_service_id == 0U || destination_service_id == 0U || request_id == 0U)
+        return;
+    scheduler_ipc_expired_call_t *entry =
+        &ipc_expired_calls[ipc_expired_history_cursor % SCHEDULER_IPC_EXPIRED_HISTORY];
+    entry->valid = true;
+    entry->source_service_id = source_service_id;
+    entry->destination_service_id = destination_service_id;
+    entry->request_id = request_id;
+    ipc_expired_history_cursor = (ipc_expired_history_cursor + 1U) % SCHEDULER_IPC_EXPIRED_HISTORY;
+}
+
+static bool scheduler_ipc_expired_match_locked(
+    scheduler_ipc_service_id_t source_service_id,
+    scheduler_ipc_service_id_t destination_service_id,
+    uint32_t request_id) {
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_EXPIRED_HISTORY; ++i) {
+        const scheduler_ipc_expired_call_t *entry = &ipc_expired_calls[i];
+        if (entry->valid && entry->source_service_id == source_service_id &&
+            entry->destination_service_id == destination_service_id &&
+            entry->request_id == request_id) return true;
+    }
+    return false;
+}
+
+static void scheduler_ipc_pending_expire_task_locked(uint32_t task_index) {
+    if (task_index >= SCHEDULER_MAX_TASKS) return;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+        scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[i];
+        if (!pending->active || pending->completed || pending->cancelled ||
+            pending->expired || pending->owner_task_index != task_index ||
+            !pending->waiting) continue;
+        pending->expired = true;
+        scheduler_ipc_expired_record_locked(pending->source_service_id,
+            pending->destination_service_id, pending->request_id);
+    }
+}
+
 static bool scheduler_deadline_reached(uint64_t now, uint64_t deadline) {
     return (int64_t)(now - deadline) >= 0;
 }
@@ -366,6 +434,7 @@ static void scheduler_process_timeouts(uint64_t now) {
         scheduler_task_t *task = &task_table[i];
         if (task->state != SCHEDULER_TASK_BLOCKED || !task->has_deadline ||
             !scheduler_deadline_reached(now, task->wait_deadline)) continue;
+        scheduler_ipc_pending_expire_task_locked(i);
         scheduler_remove_waiter_locked(i);
         task->has_deadline = false;
         task->wait_deadline = 0U;
@@ -471,6 +540,7 @@ bool scheduler_task_cancel(scheduler_task_id_t task_id) {
         scheduler_irq_restore(flags);
         return false;
     }
+    scheduler_ipc_pending_owner_cancel_locked(index);
     scheduler_remove_waiter_locked(index);
     task_table[index].has_deadline = false;
     task_table[index].wait_deadline = 0U;
@@ -710,6 +780,11 @@ bool scheduler_ipc_send(scheduler_ipc_channel_t *channel,
             scheduler_irq_restore(flags);
             return false;
         }
+        if (task_table[index].wait_result == SCHEDULER_WAIT_CANCELLED ||
+            task_table[index].wait_result == SCHEDULER_WAIT_TIMED_OUT) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
         scheduler_irq_restore(flags);
     }
 }
@@ -741,6 +816,11 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
         }
         scheduler_irq_restore(flags);
         if (!scheduler_wait_for_blocked_task(index)) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (task_table[index].wait_result == SCHEDULER_WAIT_CANCELLED ||
+            task_table[index].wait_result == SCHEDULER_WAIT_TIMED_OUT) {
             scheduler_irq_restore(flags);
             return false;
         }
@@ -914,6 +994,46 @@ static scheduler_ipc_service_t *scheduler_ipc_find_service_locked(
         if (ipc_services[i].active && ipc_services[i].id == service_id)
             return &ipc_services[i];
     return NULL;
+}
+
+static void scheduler_ipc_pending_release_locked(uint32_t index) {
+    if (index >= SCHEDULER_IPC_MAX_PENDING_CALLS) return;
+    scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[index];
+    if (!pending->active) return;
+    if (pending->expired || pending->cancelled) {
+        scheduler_ipc_expired_record_locked(pending->source_service_id,
+            pending->destination_service_id, pending->request_id);
+    }
+    scheduler_ipc_service_t *source =
+        scheduler_ipc_find_service_locked(pending->source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(pending->destination_service_id);
+    if (source != NULL && source->active_calls > 0U) --source->active_calls;
+    if (destination != NULL && destination->active_calls > 0U) --destination->active_calls;
+    pending->active = false;
+    pending->completed = false;
+    pending->expired = false;
+    pending->cancelled = false;
+    pending->waiting = false;
+    pending->source_service_id = 0U;
+    pending->destination_service_id = 0U;
+    pending->request_id = 0U;
+    pending->owner_task_index = SCHEDULER_NO_TASK;
+    pending->waiters.waiters = 0U;
+    pending->response = (scheduler_ipc_message_t){0};
+}
+
+static void scheduler_ipc_pending_owner_cancel_locked(uint32_t owner_index) {
+    if (owner_index >= SCHEDULER_MAX_TASKS) return;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+        scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[i];
+        if (!pending->active || pending->owner_task_index != owner_index) continue;
+        pending->cancelled = true;
+        pending->expired = true;
+        scheduler_ipc_expired_record_locked(pending->source_service_id,
+            pending->destination_service_id, pending->request_id);
+        scheduler_ipc_pending_release_locked(i);
+    }
 }
 
 bool scheduler_ipc_service_register(const char *name,
@@ -1134,8 +1254,79 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
     const bool allowed = responder != NULL && requester != NULL &&
         (responder->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U &&
         (requester->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) != 0U;
+    if (!allowed) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+
+    bool active_pair = false;
+    uint32_t pending_index = SCHEDULER_NO_TASK;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+        scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[i];
+        if (!pending->active ||
+            pending->source_service_id != request->source_service_id ||
+            pending->destination_service_id != responder_service_id) continue;
+        active_pair = true;
+        if (pending->request_id == request->request_id) {
+            pending_index = i;
+            break;
+        }
+    }
+
+    if (pending_index != SCHEDULER_NO_TASK) {
+        scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[pending_index];
+        if (pending->completed || pending->expired || pending->cancelled) {
+            scheduler_ipc_expired_record_locked(pending->source_service_id,
+                pending->destination_service_id, pending->request_id);
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (pending->owner_task_index >= SCHEDULER_MAX_TASKS) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        scheduler_task_t *owner = &task_table[pending->owner_task_index];
+        if (pending->waiting && owner->wait_result == SCHEDULER_WAIT_TIMED_OUT) {
+            pending->expired = true;
+            scheduler_ipc_expired_record_locked(pending->source_service_id,
+                pending->destination_service_id, pending->request_id);
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        if (pending->waiting && owner->wait_result == SCHEDULER_WAIT_CANCELLED) {
+            pending->cancelled = true;
+            pending->expired = true;
+            scheduler_ipc_expired_record_locked(pending->source_service_id,
+                pending->destination_service_id, pending->request_id);
+            scheduler_irq_restore(flags);
+            return false;
+        }
+
+        scheduler_ipc_message_t routed;
+        scheduler_ipc_message_copy(&routed, response);
+        routed.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+        routed.kind = status == SCHEDULER_IPC_STATUS_OK
+            ? SCHEDULER_IPC_KIND_RESPONSE : SCHEDULER_IPC_KIND_ERROR;
+        routed.status = status;
+        routed.source_service_id = responder_service_id;
+        routed.request_id = request->request_id;
+        pending->response = routed;
+        pending->completed = true;
+        if (pending->waiting && owner->state == SCHEDULER_TASK_BLOCKED &&
+            owner->waiting_on == &pending->waiters)
+            (void)wait_queue_wake_one_locked(&pending->waiters);
+        scheduler_irq_restore(flags);
+        return true;
+    }
+
+    /* Never leak late, timed-out, cancelled, or mismatched replies into a client's
+       ordinary receive queue while that endpoint has active pending calls. */
+    if (active_pair || scheduler_ipc_expired_match_locked(request->source_service_id,
+            responder_service_id, request->request_id)) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
     scheduler_irq_restore(flags);
-    if (!allowed) return false;
 
     scheduler_ipc_message_t message;
     scheduler_ipc_message_copy(&message, response);
@@ -1160,6 +1351,187 @@ bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *messag
     if (message->kind == SCHEDULER_IPC_KIND_ERROR)
         return message->status != SCHEDULER_IPC_STATUS_OK;
     return false;
+}
+
+
+bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
+                                scheduler_ipc_service_id_t destination_service_id,
+                                const scheduler_ipc_message_t *request,
+                                uint64_t timeout_ticks,
+                                scheduler_ipc_message_t *response,
+                                volatile uint32_t *request_id_out) {
+    if (!scheduler_ipc_message_valid(request) || response == NULL ||
+        request_id_out == NULL || timeout_ticks == 0U ||
+        timeout_ticks > (uint64_t)INT64_MAX) return false;
+
+    uint32_t pending_index = SCHEDULER_NO_TASK;
+    uint32_t owner_index = SCHEDULER_NO_TASK;
+    uint32_t request_id = 0U;
+    const uint64_t flags = scheduler_irq_save_disable();
+    owner_index = current_task_index;
+    if (!preemptive_active || owner_index >= SCHEDULER_MAX_TASKS ||
+        task_table[owner_index].state != SCHEDULER_TASK_RUNNING ||
+        task_table[owner_index].waiting_on != NULL || next_ipc_runtime_request_id == 0U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+
+    scheduler_ipc_service_t *source = scheduler_ipc_find_service_locked(source_service_id);
+    scheduler_ipc_service_t *destination =
+        scheduler_ipc_find_service_locked(destination_service_id);
+    if (source == NULL || destination == NULL ||
+        (source->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) == 0U ||
+        (destination->capabilities & SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE) == 0U ||
+        source->active_calls > UINT32_MAX - (source == destination ? 2U : 1U) ||
+        destination->active_calls > UINT32_MAX - 1U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+        if (!ipc_pending_calls[i].active) { pending_index = i; break; }
+    }
+    if (pending_index == SCHEDULER_NO_TASK) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+
+    request_id = next_ipc_runtime_request_id++;
+    scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[pending_index];
+    pending->active = true;
+    pending->completed = false;
+    pending->expired = false;
+    pending->cancelled = false;
+    pending->waiting = false;
+    pending->source_service_id = source_service_id;
+    pending->destination_service_id = destination_service_id;
+    pending->request_id = request_id;
+    pending->owner_task_index = owner_index;
+    pending->waiters.waiters = 0U;
+    pending->response = (scheduler_ipc_message_t){0};
+    ++source->active_calls;
+    ++destination->active_calls;
+    *request_id_out = request_id;
+    scheduler_irq_restore(flags);
+
+    scheduler_ipc_message_t outgoing;
+    scheduler_ipc_message_copy(&outgoing, request);
+    outgoing.protocol_version = SCHEDULER_IPC_PROTOCOL_VERSION;
+    outgoing.kind = SCHEDULER_IPC_KIND_REQUEST;
+    outgoing.status = SCHEDULER_IPC_STATUS_OK;
+    if (!scheduler_ipc_service_send_request(source_service_id, destination_service_id,
+                                            request_id, &outgoing)) {
+        const uint64_t cleanup_flags = scheduler_irq_save_disable();
+        scheduler_ipc_pending_release_locked(pending_index);
+        scheduler_irq_restore(cleanup_flags);
+        return false;
+    }
+
+    const uint64_t wait_flags = scheduler_irq_save_disable();
+    pending = &ipc_pending_calls[pending_index];
+    if (!pending->active) {
+        scheduler_irq_restore(wait_flags);
+        return false;
+    }
+    if (!pending->completed && !pending->expired && !pending->cancelled) {
+        owner_index = current_task_index;
+        if (owner_index >= SCHEDULER_MAX_TASKS ||
+            task_table[owner_index].state != SCHEDULER_TASK_RUNNING ||
+            task_table[owner_index].waiting_on != NULL) {
+            scheduler_ipc_pending_release_locked(pending_index);
+            scheduler_irq_restore(wait_flags);
+            return false;
+        }
+        pending->owner_task_index = owner_index;
+        pending->waiting = true;
+        scheduler_task_t *owner = &task_table[owner_index];
+        pending->waiters.waiters |= UINT32_C(1) << owner_index;
+        owner->waiting_on = &pending->waiters;
+        owner->wait_deadline = interrupts_ticks() + timeout_ticks;
+        owner->has_deadline = true;
+        owner->wait_result = SCHEDULER_WAITING;
+        owner->state = SCHEDULER_TASK_BLOCKED;
+        scheduler_irq_restore(wait_flags);
+        while (task_table[owner_index].state == SCHEDULER_TASK_BLOCKED)
+            __asm__ volatile ("sti; hlt; cli" : : : "memory");
+    } else {
+        scheduler_irq_restore(wait_flags);
+    }
+
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    pending = &ipc_pending_calls[pending_index];
+    bool success = pending->active && pending->completed &&
+        !pending->expired && !pending->cancelled;
+    if (pending->owner_task_index < SCHEDULER_MAX_TASKS) {
+        const scheduler_wait_result_t result =
+            task_table[pending->owner_task_index].wait_result;
+        if (result == SCHEDULER_WAIT_TIMED_OUT) {
+            pending->expired = true;
+            scheduler_ipc_expired_record_locked(pending->source_service_id,
+                pending->destination_service_id, pending->request_id);
+            success = false;
+        } else if (result == SCHEDULER_WAIT_CANCELLED) {
+            pending->cancelled = true;
+            pending->expired = true;
+            scheduler_ipc_expired_record_locked(pending->source_service_id,
+                pending->destination_service_id, pending->request_id);
+            success = false;
+        }
+    }
+    if (success) {
+        scheduler_ipc_message_copy(response, &pending->response);
+        success = scheduler_ipc_message_is_response_for(response, request_id) &&
+                  response->source_service_id == destination_service_id;
+    }
+    scheduler_ipc_pending_release_locked(pending_index);
+    scheduler_irq_restore(finish_flags);
+    return success;
+}
+
+bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
+                               uint32_t request_id) {
+    if (source_service_id == 0U || request_id == 0U) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i) {
+        scheduler_ipc_pending_call_t *pending = &ipc_pending_calls[i];
+        if (!pending->active || pending->source_service_id != source_service_id ||
+            pending->request_id != request_id) continue;
+        if (pending->completed || pending->expired || pending->cancelled) {
+            scheduler_irq_restore(flags);
+            return false;
+        }
+        pending->cancelled = true;
+        pending->expired = true;
+        scheduler_ipc_expired_record_locked(pending->source_service_id,
+            pending->destination_service_id, pending->request_id);
+        if (pending->owner_task_index < SCHEDULER_MAX_TASKS) {
+            scheduler_task_t *owner = &task_table[pending->owner_task_index];
+            const uint32_t bit = UINT32_C(1) << pending->owner_task_index;
+            if (owner->state == SCHEDULER_TASK_BLOCKED && owner->waiting_on != NULL) {
+                owner->waiting_on->waiters &= ~bit;
+                owner->waiting_on = NULL;
+                owner->has_deadline = false;
+                owner->wait_deadline = 0U;
+                owner->wait_result = SCHEDULER_WAIT_CANCELLED;
+                owner->state = SCHEDULER_TASK_READY;
+            } else if (owner->state == SCHEDULER_TASK_READY ||
+                       owner->state == SCHEDULER_TASK_RUNNING) {
+                owner->wait_result = SCHEDULER_WAIT_CANCELLED;
+            }
+        }
+        scheduler_irq_restore(flags);
+        return true;
+    }
+    scheduler_irq_restore(flags);
+    return false;
+}
+
+uint32_t scheduler_ipc_pending_call_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    uint32_t count = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_MAX_PENDING_CALLS; ++i)
+        if (ipc_pending_calls[i].active) ++count;
+    scheduler_irq_restore(flags);
+    return count;
 }
 
 uint32_t scheduler_ipc_service_count(void) {
@@ -1378,6 +1750,284 @@ bool scheduler_ipc_service_self_test(void) {
     return true;
 }
 
+
+
+static scheduler_ipc_service_id_t ipc_runtime_client_id;
+static scheduler_ipc_service_id_t ipc_runtime_server_id;
+static scheduler_ipc_service_id_t ipc_runtime_timeout_id;
+static scheduler_ipc_service_id_t ipc_runtime_cancel_id;
+static volatile uint32_t ipc_runtime_request_a;
+static volatile uint32_t ipc_runtime_request_b;
+static volatile uint32_t ipc_runtime_timeout_request;
+static volatile uint32_t ipc_runtime_cancel_request;
+static volatile uint32_t ipc_runtime_client_a_ok;
+static volatile uint32_t ipc_runtime_client_b_ok;
+static volatile uint32_t ipc_runtime_timeout_ok;
+static volatile uint32_t ipc_runtime_cancel_ok;
+static volatile uint32_t ipc_runtime_cancel_applied;
+static volatile uint32_t ipc_runtime_cancel_server_received;
+static volatile uint32_t ipc_runtime_late_timeout_dropped;
+static volatile uint32_t ipc_runtime_late_cancel_dropped;
+static volatile uint32_t ipc_runtime_bad_reply_dropped;
+static volatile uint32_t ipc_runtime_errors;
+
+static void ipc_runtime_client_a(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    request.type = UINT32_C(0x52544341);
+    request.length = 1U;
+    request.payload[0] = UINT8_C(0xA1);
+    ipc_runtime_client_a_ok =
+        scheduler_ipc_service_call(ipc_runtime_client_id, ipc_runtime_server_id,
+            &request, 24U, &response, &ipc_runtime_request_a) &&
+        response.request_id == ipc_runtime_request_a &&
+        response.source_service_id == ipc_runtime_server_id &&
+        response.kind == SCHEDULER_IPC_KIND_RESPONSE &&
+        response.status == SCHEDULER_IPC_STATUS_OK &&
+        response.length == 1U && response.payload[0] == UINT8_C(0xA1);
+    if (!ipc_runtime_client_a_ok) ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_client_b(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    request.type = UINT32_C(0x52544342);
+    request.length = 1U;
+    request.payload[0] = UINT8_C(0xB2);
+    ipc_runtime_client_b_ok =
+        scheduler_ipc_service_call(ipc_runtime_client_id, ipc_runtime_server_id,
+            &request, 24U, &response, &ipc_runtime_request_b) &&
+        response.request_id == ipc_runtime_request_b &&
+        response.source_service_id == ipc_runtime_server_id &&
+        response.kind == SCHEDULER_IPC_KIND_ERROR &&
+        response.status == SCHEDULER_IPC_STATUS_UNSUPPORTED &&
+        response.length == 1U && response.payload[0] == UINT8_C(0xB2);
+    if (!ipc_runtime_client_b_ok) ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_timeout_client(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    request.type = UINT32_C(0x54494D45);
+    request.length = 1U;
+    request.payload[0] = UINT8_C(0x54);
+    ipc_runtime_timeout_ok =
+        !scheduler_ipc_service_call(ipc_runtime_client_id, ipc_runtime_timeout_id,
+            &request, 4U, &response, &ipc_runtime_timeout_request);
+    if (!ipc_runtime_timeout_ok) ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_cancel_client(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    request.type = UINT32_C(0x43414E43);
+    request.length = 1U;
+    request.payload[0] = UINT8_C(0x43);
+    ipc_runtime_cancel_ok =
+        !scheduler_ipc_service_call(ipc_runtime_client_id, ipc_runtime_cancel_id,
+            &request, 28U, &response, &ipc_runtime_cancel_request);
+    if (!ipc_runtime_cancel_ok) ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_server(void) {
+    scheduler_ipc_message_t first = {0}, second = {0};
+    if (!scheduler_ipc_service_receive(ipc_runtime_server_id, &first) ||
+        !scheduler_ipc_service_receive(ipc_runtime_server_id, &second)) {
+        ++ipc_runtime_errors;
+        return;
+    }
+    if (first.kind != SCHEDULER_IPC_KIND_REQUEST ||
+        second.kind != SCHEDULER_IPC_KIND_REQUEST ||
+        first.request_id == 0U || second.request_id == 0U ||
+        first.request_id == second.request_id ||
+        first.source_service_id != ipc_runtime_client_id ||
+        second.source_service_id != ipc_runtime_client_id) {
+        ++ipc_runtime_errors;
+        return;
+    }
+    scheduler_ipc_message_t wrong = first;
+    wrong.request_id = first.request_id ^ UINT32_C(0x00010000);
+    scheduler_ipc_message_t bad_response = {0};
+    if (!scheduler_ipc_service_reply(ipc_runtime_server_id, &wrong,
+            &bad_response, SCHEDULER_IPC_STATUS_OK))
+        ++ipc_runtime_bad_reply_dropped;
+    else
+        ++ipc_runtime_errors;
+
+    scheduler_ipc_message_t response_b = {0};
+    response_b.type = UINT32_C(0x52535042);
+    response_b.length = 1U;
+    response_b.payload[0] = second.payload[0];
+    const scheduler_ipc_status_t status_b = second.payload[0] == UINT8_C(0xB2)
+        ? SCHEDULER_IPC_STATUS_UNSUPPORTED : SCHEDULER_IPC_STATUS_OK;
+    if (!scheduler_ipc_service_reply(ipc_runtime_server_id, &second,
+                                     &response_b, status_b))
+        ++ipc_runtime_errors;
+
+    scheduler_ipc_message_t response_a = {0};
+    response_a.type = UINT32_C(0x52535041);
+    response_a.length = 1U;
+    response_a.payload[0] = first.payload[0];
+    const scheduler_ipc_status_t status_a = first.payload[0] == UINT8_C(0xA1)
+        ? SCHEDULER_IPC_STATUS_OK : SCHEDULER_IPC_STATUS_UNSUPPORTED;
+    if (!scheduler_ipc_service_reply(ipc_runtime_server_id, &first,
+                                     &response_a, status_a))
+        ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_timeout_server(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    if (!scheduler_ipc_service_receive(ipc_runtime_timeout_id, &request) ||
+        request.request_id == 0U) {
+        ++ipc_runtime_errors;
+        return;
+    }
+    if (!scheduler_sleep_ticks(9U)) { ++ipc_runtime_errors; return; }
+    response.type = UINT32_C(0x4C415445);
+    response.length = 1U;
+    response.payload[0] = UINT8_C(0x54);
+    if (!scheduler_ipc_service_reply(ipc_runtime_timeout_id, &request, &response,
+                                     SCHEDULER_IPC_STATUS_OK))
+        ++ipc_runtime_late_timeout_dropped;
+    else
+        ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_cancel_server(void) {
+    scheduler_ipc_message_t request = {0}, response = {0};
+    if (!scheduler_ipc_service_receive(ipc_runtime_cancel_id, &request)) {
+        ++ipc_runtime_errors;
+        return;
+    }
+    ipc_runtime_cancel_server_received = 1U;
+    if (!scheduler_sleep_ticks(9U)) { ++ipc_runtime_errors; return; }
+    response.type = UINT32_C(0x4C415445);
+    response.length = 1U;
+    response.payload[0] = UINT8_C(0x43);
+    if (!scheduler_ipc_service_reply(ipc_runtime_cancel_id, &request, &response,
+                                     SCHEDULER_IPC_STATUS_OK))
+        ++ipc_runtime_late_cancel_dropped;
+    else
+        ++ipc_runtime_errors;
+}
+
+static void ipc_runtime_cancel_controller(void) {
+    uint64_t guard = 0U;
+    while (ipc_runtime_cancel_server_received == 0U &&
+           guard++ < UINT64_C(1000000))
+        __asm__ volatile ("pause");
+    if (ipc_runtime_cancel_server_received == 0U ||
+        ipc_runtime_cancel_request == 0U) {
+        ++ipc_runtime_errors;
+        return;
+    }
+    if (!scheduler_sleep_ticks(2U)) { ++ipc_runtime_errors; return; }
+    if (scheduler_ipc_call_cancel(ipc_runtime_client_id, ipc_runtime_cancel_request))
+        ipc_runtime_cancel_applied = 1U;
+    else
+        ++ipc_runtime_errors;
+}
+
+bool scheduler_ipc_runtime_self_test(void) {
+    scheduler_init();
+    if (scheduler_ipc_service_count() != 0U) return false;
+    ipc_runtime_client_a_ok = 0U;
+    ipc_runtime_client_b_ok = 0U;
+    ipc_runtime_timeout_ok = 0U;
+    ipc_runtime_cancel_ok = 0U;
+    ipc_runtime_cancel_applied = 0U;
+    ipc_runtime_cancel_server_received = 0U;
+    ipc_runtime_late_timeout_dropped = 0U;
+    ipc_runtime_late_cancel_dropped = 0U;
+    ipc_runtime_bad_reply_dropped = 0U;
+    ipc_runtime_errors = 0U;
+    ipc_runtime_request_a = 0U;
+    ipc_runtime_request_b = 0U;
+    ipc_runtime_timeout_request = 0U;
+    ipc_runtime_cancel_request = 0U;
+
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY |
+                          SCHEDULER_IPC_SERVICE_CAP_REQUEST_RESPONSE;
+    if (!scheduler_ipc_service_register_ex("rt.client", caps, &ipc_runtime_client_id) ||
+        !scheduler_ipc_service_register_ex("rt.server", caps, &ipc_runtime_server_id) ||
+        !scheduler_ipc_service_register_ex("rt.timeout", caps, &ipc_runtime_timeout_id) ||
+        !scheduler_ipc_service_register_ex("rt.cancel", caps, &ipc_runtime_cancel_id))
+        return false;
+
+    scheduler_task_id_t client_a = 0U, client_b = 0U, timeout_client = 0U,
+        cancel_client = 0U, server = 0U, timeout_server = 0U, cancel_server = 0U,
+        cancel_controller = 0U;
+    if (!scheduler_task_create(ipc_runtime_client_a, &client_a) ||
+        !scheduler_task_create(ipc_runtime_client_b, &client_b) ||
+        !scheduler_task_create(ipc_runtime_timeout_client, &timeout_client) ||
+        !scheduler_task_create(ipc_runtime_cancel_client, &cancel_client) ||
+        !scheduler_task_create(ipc_runtime_server, &server) ||
+        !scheduler_task_create(ipc_runtime_timeout_server, &timeout_server) ||
+        !scheduler_task_create(ipc_runtime_cancel_server, &cancel_server) ||
+        !scheduler_task_create(ipc_runtime_cancel_controller, &cancel_controller))
+        return false;
+
+    preemptive_active = true;
+    bootstrap_frame = NULL;
+    current_task_index = SCHEDULER_NO_TASK;
+    preemptive_ticks = 0U;
+    preemptive_switches = 0U;
+    preemptive_tick_limit = 64U;
+    const uint64_t target = interrupts_ticks() + 64U;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target);
+    interrupts_disable();
+
+    const bool states_ok = waited && !preemptive_active && bootstrap_frame == NULL &&
+        scheduler_task_state(client_a) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(client_b) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(timeout_client) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(cancel_client) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(server) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(timeout_server) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(cancel_server) == SCHEDULER_TASK_EXITED &&
+        scheduler_task_state(cancel_controller) == SCHEDULER_TASK_EXITED;
+    const bool results_ok = ipc_runtime_client_a_ok == 1U &&
+        ipc_runtime_client_b_ok == 1U && ipc_runtime_timeout_ok == 1U &&
+        ipc_runtime_cancel_ok == 1U && ipc_runtime_cancel_applied == 1U &&
+        ipc_runtime_late_timeout_dropped == 1U &&
+        ipc_runtime_late_cancel_dropped == 1U &&
+        ipc_runtime_bad_reply_dropped == 1U &&
+        ipc_runtime_errors == 0U && scheduler_failed_count() == 0U &&
+        scheduler_ipc_pending_call_count() == 0U &&
+        scheduler_ipc_service_count() == 4U;
+    const bool reaped = states_ok && results_ok &&
+        scheduler_task_reap(client_a) && scheduler_task_reap(client_b) &&
+        scheduler_task_reap(timeout_client) && scheduler_task_reap(cancel_client) &&
+        scheduler_task_reap(server) && scheduler_task_reap(timeout_server) &&
+        scheduler_task_reap(cancel_server) && scheduler_task_reap(cancel_controller);
+
+    if (!states_ok || !results_ok || !reaped) {
+        serial_write("HYBRID: IPC_RUNTIME_DIAG states=");
+        serial_write_hex64(scheduler_task_state(client_a)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(client_b)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(timeout_client)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(cancel_client)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(server)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(timeout_server)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(cancel_server)); serial_write(",");
+        serial_write_hex64(scheduler_task_state(cancel_controller));
+        serial_write(" results="); serial_write_hex64(ipc_runtime_client_a_ok);
+        serial_write(","); serial_write_hex64(ipc_runtime_client_b_ok);
+        serial_write(","); serial_write_hex64(ipc_runtime_timeout_ok);
+        serial_write(","); serial_write_hex64(ipc_runtime_cancel_ok);
+        serial_write(" cancel="); serial_write_hex64(ipc_runtime_cancel_applied);
+        serial_write(" late="); serial_write_hex64(ipc_runtime_late_timeout_dropped);
+        serial_write(","); serial_write_hex64(ipc_runtime_late_cancel_dropped);
+        serial_write(" bad="); serial_write_hex64(ipc_runtime_bad_reply_dropped);
+        serial_write(" pending="); serial_write_hex64(scheduler_ipc_pending_call_count());
+        serial_write(" errors="); serial_write_hex64(ipc_runtime_errors);
+        serial_write("\n");
+    }
+
+    if (!reaped) return false;
+    const bool unregistered = scheduler_ipc_service_unregister(ipc_runtime_client_id) &&
+        scheduler_ipc_service_unregister(ipc_runtime_server_id) &&
+        scheduler_ipc_service_unregister(ipc_runtime_timeout_id) &&
+        scheduler_ipc_service_unregister(ipc_runtime_cancel_id);
+    return unregistered && scheduler_ipc_service_count() == 0U;
+}
 
 bool scheduler_ipc_request_response_discovery_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;

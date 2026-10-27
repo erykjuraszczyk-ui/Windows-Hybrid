@@ -20,6 +20,7 @@ typedef enum {
 #define SCHEDULER_IPC_CAPACITY 4U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
+#define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
 #define SCHEDULER_IPC_PROTOCOL_VERSION 1U
 #define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
@@ -137,6 +138,17 @@ bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id
 bool scheduler_ipc_message_is_response_for(const scheduler_ipc_message_t *message,
                                            uint32_t request_id);
 uint32_t scheduler_ipc_service_count(void);
+bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
+                                scheduler_ipc_service_id_t destination_service_id,
+                                const scheduler_ipc_message_t *request,
+                                uint64_t timeout_ticks,
+                                scheduler_ipc_message_t *response,
+                                volatile uint32_t *request_id_out);
+bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
+                               uint32_t request_id);
+uint32_t scheduler_ipc_pending_call_count(void);
+bool scheduler_ipc_runtime_self_test(void);
+
 bool scheduler_ipc_service_self_test(void);
 bool scheduler_ipc_request_response_discovery_self_test(void);
 bool scheduler_blocking_sync_self_test(void);
