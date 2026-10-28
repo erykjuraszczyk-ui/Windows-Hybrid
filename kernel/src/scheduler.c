@@ -2712,13 +2712,15 @@ bool scheduler_ipc_fair_admission_self_test(void) {
         !scheduler_ipc_service_register_ex("fair.high", caps, &high) ||
         !scheduler_ipc_service_register_ex("fair.destination", caps, &destination))
         return false;
-    if (!scheduler_ipc_service_set_priority(low, 1U) ||
-        !scheduler_ipc_service_set_priority(medium, 2U) ||
-        !scheduler_ipc_service_set_priority(high, 8U) ||
-        !scheduler_ipc_service_set_source_quota(destination, 2U) ||
-        !scheduler_ipc_service_set_priority_admission(destination, true) ||
-        scheduler_ipc_service_set_source_quota(destination, SCHEDULER_IPC_CAPACITY + 1U))
+    serial_write("HYBRID: FAIR_DEBUG_REGISTERED\n");
+    if (!scheduler_ipc_service_set_priority(low, 1U)) return false;
+    if (!scheduler_ipc_service_set_priority(medium, 2U)) return false;
+    if (!scheduler_ipc_service_set_priority(high, 8U)) return false;
+    if (!scheduler_ipc_service_set_source_quota(destination, 2U)) return false;
+    if (!scheduler_ipc_service_set_priority_admission(destination, true)) return false;
+    if (scheduler_ipc_service_set_source_quota(destination, SCHEDULER_IPC_CAPACITY + 1U))
         return false;
+    serial_write("HYBRID: FAIR_DEBUG_CONFIGURED\n");
     serial_write("HYBRID: FAIR_DEBUG_REGISTER_OK\n");
     scheduler_ipc_diagnostics_t before = {0}, after = {0};
     scheduler_ipc_get_diagnostics(&before);
