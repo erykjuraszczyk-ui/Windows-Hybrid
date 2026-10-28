@@ -239,7 +239,7 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 
 ## HYBRID OS v0.20.0 — IPC Fair Scheduling, Per-Source Quotas & Priority-Aware Admission
 
-**Status: CI pending.** Wymagany marker QEMU: `HYBRID: IPC_FAIR_ADMISSION_SELFTEST_OK`.
+**Status: CI PASS po scaleniu.** Przebieg [GitHub Actions #40680724904](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40680724904) potwierdził `IPC_FAIR_ADMISSION_SELFTEST_OK`, `BOOT_OK` i końcowy marker `PASS`.
 
 - Odbiór z kolejki usługi wybiera źródła round-robin po identyfikatorze źródła, zachowując FIFO w obrębie źródła. Kanały ogólne z `source_service_id == 0` zachowują FIFO.
 - `scheduler_ipc_service_set_source_quota(destination, limit)` ogranicza liczbę wiadomości jednego źródła oczekujących u odbiorcy. `0` wyłącza limit; limit maksymalny to pojemność kolejki.
