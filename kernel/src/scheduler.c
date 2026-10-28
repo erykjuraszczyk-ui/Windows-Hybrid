@@ -1371,7 +1371,7 @@ bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
 }
 
 static bool scheduler_ipc_rate_limit_admit_locked(scheduler_ipc_service_t *service,
-                                                   uint64_t now) {
+                                                   uint64_t now, bool consume) {
     if (service == NULL || !service->rate_limit_enabled) return true;
     if (now >= service->rate_limit_last_refill_tick &&
         service->rate_limit_refill_interval_ticks != 0U) {
@@ -1397,7 +1397,7 @@ static bool scheduler_ipc_rate_limit_admit_locked(scheduler_ipc_service_t *servi
         ++ipc_diag_rate_limited_messages;
         return false;
     }
-    --service->rate_limit_tokens;
+    if (consume) --service->rate_limit_tokens;
     return true;
 }
 
@@ -1724,7 +1724,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
     }
-    if (!scheduler_ipc_rate_limit_admit_locked(destination, now)) {
+    if (!scheduler_ipc_rate_limit_admit_locked(destination, now, false)) {
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_RATE_LIMITED;
     }
@@ -1771,6 +1771,10 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         }
     }
 
+    if (!scheduler_ipc_rate_limit_admit_locked(destination, now, true)) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_RATE_LIMITED;
+    }
     scheduler_ipc_message_t forwarded;
     scheduler_ipc_message_copy(&forwarded, message);
     forwarded.source_service_id = source_service_id;
