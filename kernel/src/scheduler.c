@@ -2454,6 +2454,7 @@ bool scheduler_ipc_adaptive_load_self_test(void) {
 }
 
 
+
 bool scheduler_ipc_rate_limit_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, destination = 0U;
@@ -2461,51 +2462,55 @@ bool scheduler_ipc_rate_limit_self_test(void) {
     if (!scheduler_ipc_service_register_ex("limit.src", caps, &source) ||
         !scheduler_ipc_service_register_ex("limit.dst", caps, &destination))
         return false;
-    serial_write("HYBRID: RATE_STEP_1\n");
     if (!scheduler_ipc_service_set_rate_limit(destination, 2U, 1U, 4U) ||
         scheduler_ipc_service_set_rate_limit(destination, 0U, 1U, 4U) ||
         scheduler_ipc_service_set_rate_limit(destination, 2U, 0U, 4U) ||
         scheduler_ipc_service_set_rate_limit(destination, 2U, 1U, 0U))
         return false;
-    serial_write("HYBRID: RATE_STEP_2\n");
+
     scheduler_ipc_diagnostics_t before = {0}, after = {0};
     scheduler_ipc_get_diagnostics(&before);
     scheduler_ipc_message_t message = {0};
     message.type = UINT32_C(0x52415445);
     message.length = 1U;
     message.payload[0] = UINT8_C(0x42);
-    if (scheduler_ipc_service_send_ex(source, destination, 1U, &message) != SCHEDULER_IPC_DELIVERY_DELIVERED ||
-        scheduler_ipc_service_send_ex(source, destination, 2U, &message) != SCHEDULER_IPC_DELIVERY_DELIVERED ||
-        scheduler_ipc_service_send_ex(source, destination, 3U, &message) != SCHEDULER_IPC_DELIVERY_RATE_LIMITED)
+    if (scheduler_ipc_service_send_ex(source, destination, 1U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED ||
+        scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED ||
+        scheduler_ipc_service_send_ex(source, destination, 3U, &message) !=
+            SCHEDULER_IPC_DELIVERY_RATE_LIMITED)
         return false;
-    serial_write("HYBRID: RATE_STEP_3\n");
+
     scheduler_ipc_service_info_t info = {0};
     if (!scheduler_ipc_service_get_info(destination, &info) ||
         !info.rate_limit_enabled || info.rate_limit_tokens != 0U ||
         info.rate_limit_capacity != 2U || info.rate_limited_messages != 1U ||
         info.queued_messages != 2U) return false;
-    serial_write("HYBRID: RATE_STEP_4\n");
+
     const uint64_t target_tick = interrupts_ticks() + 5U;
     interrupts_enable();
     const bool waited = interrupts_wait_for_ticks(target_tick);
     interrupts_disable();
-    serial_write("HYBRID: RATE_STEP_5\n");
-    if (!waited || scheduler_ipc_service_send_ex(source, destination, 4U, &message) !=
+    if (!waited ||
+        scheduler_ipc_service_send_ex(source, destination, 4U, &message) !=
             SCHEDULER_IPC_DELIVERY_DELIVERED ||
         !scheduler_ipc_service_get_info(destination, &info) ||
-        info.rate_limit_tokens != 0U || info.queued_messages != 3U) return false;
-    serial_write("HYBRID: RATE_STEP_6\n");
+        info.rate_limit_tokens != 0U || info.queued_messages != 3U)
+        return false;
+
     scheduler_ipc_message_t received = {0};
-    for (uint32_t i = 1U; i <= 3U; ++i)
+    const uint32_t expected_ids[3] = { 1U, 2U, 4U };
+    for (uint32_t i = 0U; i < 3U; ++i) {
         if (!scheduler_ipc_service_receive(destination, &received) ||
-            received.request_id != i || received.payload[0] != UINT8_C(0x42)) return false;
-    if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 4U) return false;
-    serial_write("HYBRID: RATE_STEP_7\n");
+            received.request_id != expected_ids[i] ||
+            received.payload[0] != UINT8_C(0x42)) return false;
+    }
     scheduler_ipc_get_diagnostics(&after);
-    const bool stats_ok = after.rate_limited_messages == before.rate_limited_messages + 1U &&
+    const bool stats_ok =
+        after.rate_limited_messages == before.rate_limited_messages + 1U &&
         scheduler_ipc_service_get_info(destination, &info) &&
         info.rate_limited_messages == 1U && info.queued_messages == 0U;
-    serial_write("HYBRID: RATE_STEP_8\n");
     const bool cleanup = scheduler_ipc_service_unregister(destination) &&
         scheduler_ipc_service_unregister(source) && scheduler_ipc_service_count() == 0U;
     return stats_ok && cleanup;
