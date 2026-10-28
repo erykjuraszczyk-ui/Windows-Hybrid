@@ -236,6 +236,9 @@ typedef struct {
     scheduler_wait_queue_t writers;
     scheduler_ipc_service_id_t last_served_source_service_id;
     uint64_t starvation_threshold_ticks;
+    uint64_t deadline_aware_selections;
+    uint64_t starvation_preventions;
+    uint64_t qos_profile_selections;
 } scheduler_ipc_channel_t;
 typedef struct {
     volatile uint32_t count;
