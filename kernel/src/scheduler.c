@@ -885,7 +885,8 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 for (uint32_t offset = 0U; offset < channel->count; ++offset) {
                     const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
                     if ((uint32_t)channel->messages[index].qos_profile == highest_qos) {
-                        if (!found_profile) selected_offset = offset; found_profile = true;
+                        if (!found_profile) selected_offset = offset;
+                        found_profile = true;
                     }
                 }
                 if (highest_qos > (uint32_t)SCHEDULER_IPC_QOS_BEST_EFFORT) ++ipc_diag_qos_profile_selections;
@@ -895,7 +896,8 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                     const scheduler_ipc_message_t *candidate = &channel->messages[index];
                     if ((uint32_t)candidate->qos_profile != highest_qos) continue;
                     const scheduler_ipc_service_id_t cs = candidate->source_service_id;
-                    if (cs == 0U) continue; has_nonzero_sources = true;
+                    if (cs == 0U) continue;
+                    has_nonzero_sources = true;
                     if (cs < smallest_source) smallest_source = cs;
                     if (cs > channel->last_served_source_service_id && cs < next_source) next_source = cs;
                 }
