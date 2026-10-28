@@ -2823,7 +2823,7 @@ bool scheduler_ipc_deadline_qos_self_test(void) {
     message.deadline_tick=0U;
     if (scheduler_ipc_service_send_ex(best_effort,destination,102U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) { serial_write("HYBRID: QOS_FAIL_8\\n"); return false; }
     const uint64_t target=interrupts_ticks()+25U; interrupts_enable();
-    const bool waited=interrupts_wait_for_ticks(target); interrupts_disable(); if(!waited)serial_write("HYBRID: QOS_FAIL_9\\n"); return false;
+    const bool waited=interrupts_wait_for_ticks(target); interrupts_disable(); if(!waited) { serial_write("HYBRID: QOS_FAIL_9\\n"); return false; }
     message.deadline_tick=interrupts_ticks()+1U;
     if (scheduler_ipc_service_send_ex(deadline,destination,202U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) { serial_write("HYBRID: QOS_FAIL_10\\n"); return false; }
     if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=102U||
