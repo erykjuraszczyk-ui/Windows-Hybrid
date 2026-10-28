@@ -1857,6 +1857,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
 
     scheduler_ipc_delivery_result_t result = SCHEDULER_IPC_DELIVERY_DELIVERED;
     if (channel->count == SCHEDULER_IPC_CAPACITY) {
+        bool slot_freed = false;
         if (destination->priority_admission_enabled) {
             uint32_t victim_offset = SCHEDULER_IPC_CAPACITY;
             uint32_t victim_priority = UINT32_MAX;
@@ -1881,6 +1882,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
                 ++destination->priority_preemptions;
                 ++ipc_diag_priority_preemptions;
                 result = SCHEDULER_IPC_DELIVERY_PRIORITY_PREEMPTED;
+                slot_freed = true;
             } else {
                 ++destination->backpressure_events;
                 ++ipc_diag_backpressure_events;
@@ -1890,23 +1892,26 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
                 return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
             }
         }
-        if (channel->count == SCHEDULER_IPC_CAPACITY && destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_NEWEST) {
-        ++destination->backpressure_events;
-        ++ipc_diag_backpressure_events;
-        if (channel->count == SCHEDULER_IPC_CAPACITY && destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_NEWEST) {
+        if (!slot_freed && destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_NEWEST) {
+            ++destination->backpressure_events;
+            ++ipc_diag_backpressure_events;
             ++destination->messages_dropped_newest;
             ++ipc_diag_messages_dropped_newest;
             scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
             scheduler_irq_restore(flags);
             return SCHEDULER_IPC_DELIVERY_DROPPED_NEWEST;
         }
-        if (channel->count == SCHEDULER_IPC_CAPACITY && destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_OLDEST) {
+        if (!slot_freed && destination->queue_policy == SCHEDULER_IPC_QUEUE_DROP_OLDEST) {
             channel->head = (channel->head + 1U) % SCHEDULER_IPC_CAPACITY;
             --channel->count;
             ++destination->messages_dropped_oldest;
             ++ipc_diag_messages_dropped_oldest;
             result = SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST;
-        } else if (channel->count == SCHEDULER_IPC_CAPACITY) {
+            slot_freed = true;
+        }
+        if (!slot_freed) {
+            ++destination->backpressure_events;
+            ++ipc_diag_backpressure_events;
             ++destination->messages_rejected_full;
             ++ipc_diag_messages_rejected_full;
             scheduler_ipc_service_report_locked(destination, false, interrupts_ticks());
