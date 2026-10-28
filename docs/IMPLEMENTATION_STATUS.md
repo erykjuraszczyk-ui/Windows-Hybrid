@@ -247,3 +247,16 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 - Diagnostyka rejestruje odmowy quota, preempcje priorytetowe i selekcje round-robin. Domyślnie quota i priority admission są wyłączone, by zachować kompatybilność.
 
 **Ograniczenia:** sprawiedliwość dotyczy kolejności odbioru per źródło, nie planowania CPU; kolejka ma stałą pojemność 4; priorytety to wartości usług, a nie klasy czasu rzeczywistego. Kernel pozostaje jednordzeniowy Ring 0.
+
+
+## HYBRID OS v0.21.0 — IPC Deadline-Aware Scheduling, Starvation Prevention & QoS Profiles
+
+**Status: walidacja CI w toku.** PASS dopiero po potwierdzeniu kompilacji ISO i markera `IPC_DEADLINE_QOS_SELFTEST_OK`.
+
+- Wiadomość IPC przechowuje tick enqueue, deadline i profil QoS; metadane są kopiowane przy przesuwaniu wiadomości w buforze.
+- `scheduler_ipc_service_set_qos_profile(service, profile, default_deadline_budget_ticks, starvation_threshold_ticks)` konfiguruje profil nadawcy, domyślny budżet deadline’u i próg starzenia kolejki odbiorcy. Profil `DEADLINE_CRITICAL` wymaga niezerowego budżetu deadline’u.
+- Odbiór najpierw wybiera najstarszą wiadomość, która przekroczyła próg starzenia; w przeciwnym razie wybiera najbliższy deadline; bez deadline’ów wybiera najwyższą klasę QoS i zachowuje round-robin w obrębie tej klasy.
+- Profile: `BEST_EFFORT`, `NORMAL`, `LATENCY_SENSITIVE`, `DEADLINE_CRITICAL`. Deadline wiadomości jest absolutnym tickiem PIT; źródło może ustawić domyślny budżet.
+- Diagnostyka liczy wybory deadline-aware, zapobieżenia starvation i wybory QoS. Test QEMU weryfikuje pierwszeństwo deadline’u oraz obsługę starej wiadomości best-effort przed nowszą wiadomością krytyczną.
+
+**Ograniczenia:** ticki PIT nie są zegarem czasu rzeczywistego; QoS nie gwarantuje twardych deadline’ów. Kolejka ma pojemność 4, synchronizacja pozostaje jednordzeniowa.
