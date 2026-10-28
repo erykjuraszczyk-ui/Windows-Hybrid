@@ -52,6 +52,7 @@ static uint64_t ipc_diag_replies_dropped;
 static uint64_t ipc_diag_services_closed;
 static scheduler_ipc_trace_event_t ipc_trace_events[SCHEDULER_IPC_TRACE_CAPACITY];
 static uint64_t ipc_trace_next_sequence=1U, ipc_trace_overwritten;
+static uint64_t ipc_diag_fair_receive_selections;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1105,7 +1106,6 @@ static uint64_t ipc_diag_circuit_open_rejections;
 static uint64_t ipc_diag_rate_limited_messages;
 static uint64_t ipc_diag_source_quota_rejections;
 static uint64_t ipc_diag_priority_preemptions;
-static uint64_t ipc_diag_fair_receive_selections;
 static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
 static uint32_t ipc_dead_letter_head;
 static uint32_t ipc_dead_letter_count;
