@@ -53,6 +53,9 @@ static uint64_t ipc_diag_services_closed;
 static scheduler_ipc_trace_event_t ipc_trace_events[SCHEDULER_IPC_TRACE_CAPACITY];
 static uint64_t ipc_trace_next_sequence=1U, ipc_trace_overwritten;
 static uint64_t ipc_diag_fair_receive_selections;
+static uint64_t ipc_diag_deadline_aware_selections;
+static uint64_t ipc_diag_starvation_preventions;
+static uint64_t ipc_diag_qos_profile_selections;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -912,8 +915,10 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                     if (selected_offset != 0U) ++ipc_diag_fair_receive_selections;
                 }
             }
-            if (selected_by_starvation) ++ipc_diag_starvation_preventions;
-            if (selected_by_deadline) ++ipc_diag_deadline_aware_selections;
+            if (selected_by_starvation) { ++ipc_diag_starvation_preventions; ++channel->starvation_preventions; }
+            if (selected_by_deadline) { ++ipc_diag_deadline_aware_selections; ++channel->deadline_aware_selections; }
+            if (!selected_by_deadline && !selected_by_starvation && highest_qos > 0U)
+                ++channel->qos_profile_selections;
             const uint32_t selected_index = (channel->head + selected_offset) % SCHEDULER_IPC_CAPACITY;
             scheduler_ipc_message_copy(message, &channel->messages[selected_index]);
             for (uint32_t offset = selected_offset; offset + 1U < channel->count; ++offset) {
@@ -1110,9 +1115,6 @@ typedef struct {
     uint64_t rate_limited_messages;
     scheduler_ipc_qos_profile_t qos_profile;
     uint64_t default_deadline_budget_ticks;
-    uint64_t deadline_aware_selections;
-    uint64_t starvation_preventions;
-    uint64_t qos_profile_selections;
     scheduler_ipc_circuit_state_t circuit_state;
     scheduler_ipc_health_state_t health_state;
     uint32_t breaker_failure_threshold;
@@ -1167,9 +1169,6 @@ static uint64_t ipc_diag_circuit_open_rejections;
 static uint64_t ipc_diag_rate_limited_messages;
 static uint64_t ipc_diag_source_quota_rejections;
 static uint64_t ipc_diag_priority_preemptions;
-static uint64_t ipc_diag_deadline_aware_selections;
-static uint64_t ipc_diag_starvation_preventions;
-static uint64_t ipc_diag_qos_profile_selections;
 static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
 static uint32_t ipc_dead_letter_head;
 static uint32_t ipc_dead_letter_count;
@@ -1340,9 +1339,6 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->priority = 1U;
     free_slot->qos_profile = SCHEDULER_IPC_QOS_NORMAL;
     free_slot->default_deadline_budget_ticks = 0U;
-    free_slot->deadline_aware_selections = 0U;
-    free_slot->starvation_preventions = 0U;
-    free_slot->qos_profile_selections = 0U;
     free_slot->max_messages_per_source = 0U;
     free_slot->priority_admission_enabled = false;
     free_slot->source_quota_rejections = 0U;
@@ -1434,9 +1430,9 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->qos_profile = service->qos_profile;
     info->default_deadline_budget_ticks = service->default_deadline_budget_ticks;
     info->starvation_threshold_ticks = service->channel.starvation_threshold_ticks;
-    info->deadline_aware_selections = service->deadline_aware_selections;
-    info->starvation_preventions = service->starvation_preventions;
-    info->qos_profile_selections = service->qos_profile_selections;
+    info->deadline_aware_selections = service->channel.deadline_aware_selections;
+    info->starvation_preventions = service->channel.starvation_preventions;
+    info->qos_profile_selections = service->channel.qos_profile_selections;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         info->name[i] = service->name[i];
 }
