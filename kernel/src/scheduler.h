@@ -27,6 +27,7 @@ typedef enum {
 #define SCHEDULER_IPC_DEFAULT_CIRCUIT_FAILURE_THRESHOLD 3U
 #define SCHEDULER_IPC_PRIORITY_MIN 1U
 #define SCHEDULER_IPC_PRIORITY_MAX 8U
+#define SCHEDULER_IPC_RATE_LIMIT_MAX_BURST 64U
 #define SCHEDULER_IPC_SERVICE_NAME_SIZE 16U
 #define SCHEDULER_IPC_PROTOCOL_VERSION 1U
 #define SCHEDULER_IPC_SERVICE_CAP_ONE_WAY (UINT32_C(1) << 0U)
@@ -71,7 +72,8 @@ typedef enum {
     SCHEDULER_IPC_DELIVERY_TRACKING_CAPACITY = 11U,
     SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED = 12U,
     SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED = 13U,
-    SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN = 14U
+    SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN = 14U,
+    SCHEDULER_IPC_DELIVERY_RATE_LIMITED = 15U
 } scheduler_ipc_delivery_result_t;
 typedef enum {
     SCHEDULER_IPC_DELIVERY_STATE_FREE = 0U,
@@ -133,6 +135,10 @@ typedef struct {
     uint64_t messages_dropped_newest;
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
+    bool rate_limit_enabled;
+    uint32_t rate_limit_tokens;
+    uint32_t rate_limit_capacity;
+    uint64_t rate_limited_messages;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
 } scheduler_ipc_service_info_t;
 typedef struct {
@@ -182,6 +188,7 @@ typedef struct {
     uint64_t circuit_breaker_trips;
     uint64_t circuit_breaker_recoveries;
     uint64_t circuit_open_rejections;
+    uint64_t rate_limited_messages;
     uint32_t dead_letters_pending;
     uint32_t pending_deliveries;
     uint32_t max_queue_depth;
@@ -251,6 +258,11 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
 bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_id,
                                              scheduler_ipc_queue_policy_t policy);
 bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority);
+bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
+                                          uint32_t burst_capacity,
+                                          uint32_t refill_tokens,
+                                          uint64_t refill_interval_ticks);
+bool scheduler_ipc_rate_limit_self_test(void);
 bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
                                                     uint32_t high_watermark,
                                                     uint32_t low_watermark);
