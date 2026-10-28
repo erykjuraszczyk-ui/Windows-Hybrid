@@ -223,3 +223,15 @@ Ograniczenia: dobór celu odbywa się wyłącznie w podanej grupie usług; to ni
 - Test QEMU weryfikuje monotoniczne sequence i korelację SEND → RECEIVE → ACK.
 
 Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja pozostaje jednordzeniowa; to nie jest trwały dziennik audytowy.
+
+
+## HYBRID OS v0.19.0 — IPC Token-Bucket Rate Limiting & Admission Control
+
+**Status: CI PASS na gałęzi funkcji.** Przebieg [GitHub Actions #40667252501](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40667252501) zbudował ISO i potwierdził `IPC_TRACE_SELFTEST_OK`, `IPC_RATE_LIMIT_SELFTEST_OK`, `BOOT_OK` oraz końcowy marker `PASS`.
+
+- `scheduler_ipc_service_set_rate_limit(service_id, burst_capacity, refill_tokens, refill_interval_ticks)` konfiguruje ogranicznik token-bucket po stronie odbiorcy. Każda zaakceptowana wiadomość kosztuje jeden token; bucket startuje pełny.
+- `scheduler_ipc_service_send_ex()` uzupełnia tokeny na podstawie ticków PIT, ogranicza je do burst capacity i zwraca `SCHEDULER_IPC_DELIVERY_RATE_LIMITED`, gdy bucket jest pusty. Wiadomość nie trafia do kolejki po odmowie.
+- Token rozliczany jest dopiero po sprawdzeniu dopuszczalności kolejki; nieudane próby backpressure/drop nie zużywają tokena. Konfiguracja domyślnie jest wyłączona.
+- Per-service info i globalne diagnostyki raportują stan tokenów i liczbę odrzuceń. Test QEMU sprawdza walidację, burst, refill, kolejność oraz liczniki.
+
+**Ograniczenia:** limiter działa per odbiorca, współdzielony przez wszystkie źródła; czas opiera się na tickach PIT. Kernel pozostaje single-core Ring 0, bez SMP safety i trwałości liczników po restarcie.

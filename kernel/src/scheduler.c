@@ -1007,6 +1007,13 @@ typedef struct {
     uint64_t messages_dropped_newest;
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
+    bool rate_limit_enabled;
+    uint32_t rate_limit_capacity;
+    uint32_t rate_limit_tokens;
+    uint32_t rate_limit_refill_tokens;
+    uint64_t rate_limit_refill_interval_ticks;
+    uint64_t rate_limit_last_refill_tick;
+    uint64_t rate_limited_messages;
     scheduler_ipc_circuit_state_t circuit_state;
     scheduler_ipc_health_state_t health_state;
     uint32_t breaker_failure_threshold;
@@ -1058,6 +1065,7 @@ static uint64_t ipc_diag_service_health_failures;
 static uint64_t ipc_diag_circuit_breaker_trips;
 static uint64_t ipc_diag_circuit_breaker_recoveries;
 static uint64_t ipc_diag_circuit_open_rejections;
+static uint64_t ipc_diag_rate_limited_messages;
 static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
 static uint32_t ipc_dead_letter_head;
 static uint32_t ipc_dead_letter_count;
@@ -1236,6 +1244,13 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->messages_dropped_newest = 0U;
     free_slot->messages_dropped_oldest = 0U;
     free_slot->messages_rejected_full = 0U;
+    free_slot->rate_limit_enabled = false;
+    free_slot->rate_limit_capacity = 0U;
+    free_slot->rate_limit_tokens = 0U;
+    free_slot->rate_limit_refill_tokens = 0U;
+    free_slot->rate_limit_refill_interval_ticks = 0U;
+    free_slot->rate_limit_last_refill_tick = 0U;
+    free_slot->rate_limited_messages = 0U;
     free_slot->circuit_state = SCHEDULER_IPC_CIRCUIT_CLOSED;
     free_slot->health_state = SCHEDULER_IPC_HEALTHY;
     free_slot->breaker_failure_threshold = 0U;
@@ -1295,6 +1310,10 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->messages_dropped_newest = service->messages_dropped_newest;
     info->messages_dropped_oldest = service->messages_dropped_oldest;
     info->messages_rejected_full = service->messages_rejected_full;
+    info->rate_limit_enabled = service->rate_limit_enabled;
+    info->rate_limit_tokens = service->rate_limit_tokens;
+    info->rate_limit_capacity = service->rate_limit_capacity;
+    info->rate_limited_messages = service->rate_limited_messages;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         info->name[i] = service->name[i];
 }
@@ -1344,6 +1363,62 @@ bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_i
     return true;
 }
 
+
+
+bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
+                                          uint32_t burst_capacity,
+                                          uint32_t refill_tokens,
+                                          uint64_t refill_interval_ticks) {
+    if (burst_capacity == 0U ||
+        burst_capacity > SCHEDULER_IPC_RATE_LIMIT_MAX_BURST ||
+        refill_tokens == 0U || refill_tokens > burst_capacity ||
+        refill_interval_ticks == 0U) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->rate_limit_enabled = true;
+    service->rate_limit_capacity = burst_capacity;
+    service->rate_limit_tokens = burst_capacity;
+    service->rate_limit_refill_tokens = refill_tokens;
+    service->rate_limit_refill_interval_ticks = refill_interval_ticks;
+    service->rate_limit_last_refill_tick = interrupts_ticks();
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+static bool scheduler_ipc_rate_limit_admit_locked(scheduler_ipc_service_t *service,
+                                                   uint64_t now, bool consume) {
+    if (service == NULL || !service->rate_limit_enabled) return true;
+    if (now >= service->rate_limit_last_refill_tick &&
+        service->rate_limit_refill_interval_ticks != 0U) {
+        const uint64_t elapsed = now - service->rate_limit_last_refill_tick;
+        const uint64_t periods = elapsed / service->rate_limit_refill_interval_ticks;
+        if (periods != 0U) {
+            uint64_t added = periods;
+            if (service->rate_limit_refill_tokens != 1U) {
+                if (periods > UINT64_MAX / service->rate_limit_refill_tokens)
+                    added = UINT64_MAX;
+                else
+                    added = periods * service->rate_limit_refill_tokens;
+            }
+            const uint64_t available = (uint64_t)service->rate_limit_tokens + added;
+            service->rate_limit_tokens = available >= service->rate_limit_capacity
+                ? service->rate_limit_capacity : (uint32_t)available;
+            service->rate_limit_last_refill_tick +=
+                periods * service->rate_limit_refill_interval_ticks;
+        }
+    }
+    if (service->rate_limit_tokens == 0U) {
+        ++service->rate_limited_messages;
+        ++ipc_diag_rate_limited_messages;
+        return false;
+    }
+    if (consume) --service->rate_limit_tokens;
+    return true;
+}
 
 bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority) {
     if (priority < SCHEDULER_IPC_PRIORITY_MIN || priority > SCHEDULER_IPC_PRIORITY_MAX)
@@ -1665,9 +1740,14 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_SERVICE_CLOSED;
     }
-    if (!scheduler_ipc_circuit_admit_locked(destination, interrupts_ticks())) {
+    const uint64_t now = interrupts_ticks();
+    if (!scheduler_ipc_circuit_admit_locked(destination, now)) {
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN;
+    }
+    if (!scheduler_ipc_rate_limit_admit_locked(destination, now, false)) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_RATE_LIMITED;
     }
 
     scheduler_ipc_channel_t *channel = &destination->channel;
@@ -1712,6 +1792,10 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
         }
     }
 
+    if (!scheduler_ipc_rate_limit_admit_locked(destination, now, true)) {
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_RATE_LIMITED;
+    }
     scheduler_ipc_message_t forwarded;
     scheduler_ipc_message_copy(&forwarded, message);
     forwarded.source_service_id = source_service_id;
@@ -2492,6 +2576,64 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 }
 
 
+
+bool scheduler_ipc_rate_limit_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("limit.src", caps, &source) ||
+        !scheduler_ipc_service_register_ex("limit.dst", caps, &destination))
+        return false;
+    if (!scheduler_ipc_service_set_rate_limit(destination, 2U, 1U, 4U) ||
+        scheduler_ipc_service_set_rate_limit(destination, 0U, 1U, 4U) ||
+        scheduler_ipc_service_set_rate_limit(destination, 2U, 0U, 4U) ||
+        scheduler_ipc_service_set_rate_limit(destination, 2U, 1U, 0U))
+        return false;
+    scheduler_ipc_diagnostics_t before = {0}, after = {0};
+    scheduler_ipc_get_diagnostics(&before);
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x52415445);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0x42);
+    if (scheduler_ipc_service_send_ex(source, destination, 1U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED ||
+        scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED ||
+        scheduler_ipc_service_send_ex(source, destination, 3U, &message) !=
+            SCHEDULER_IPC_DELIVERY_RATE_LIMITED)
+        return false;
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(destination, &info) ||
+        !info.rate_limit_enabled || info.rate_limit_tokens != 0U ||
+        info.rate_limit_capacity != 2U || info.rate_limited_messages != 1U ||
+        info.queued_messages != 2U) return false;
+    const uint64_t target_tick = interrupts_ticks() + 5U;
+    interrupts_enable();
+    const bool waited = interrupts_wait_for_ticks(target_tick);
+    interrupts_disable();
+    if (!waited ||
+        scheduler_ipc_service_send_ex(source, destination, 4U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED ||
+        !scheduler_ipc_service_get_info(destination, &info) ||
+        info.rate_limit_tokens != 0U || info.queued_messages != 3U)
+        return false;
+    scheduler_ipc_message_t received = {0};
+    const uint32_t expected_ids[3] = { 1U, 2U, 4U };
+    for (uint32_t i = 0U; i < 3U; ++i) {
+        if (!scheduler_ipc_service_receive(destination, &received) ||
+            received.request_id != expected_ids[i] ||
+            received.payload[0] != UINT8_C(0x42)) return false;
+    }
+    scheduler_ipc_get_diagnostics(&after);
+    const bool stats_ok =
+        after.rate_limited_messages == before.rate_limited_messages + 1U &&
+        scheduler_ipc_service_get_info(destination, &info) &&
+        info.rate_limited_messages == 1U && info.queued_messages == 0U;
+    const bool cleanup = scheduler_ipc_service_unregister(destination) &&
+        scheduler_ipc_service_unregister(source) && scheduler_ipc_service_count() == 0U;
+    return stats_ok && cleanup;
+}
+
 bool scheduler_ipc_trace_self_test(void) {
     scheduler_ipc_service_id_t src=0U,dst=0U;
     if(!scheduler_ipc_service_register_ex("trace.source",SCHEDULER_IPC_SERVICE_CAP_ONE_WAY,&src) ||
@@ -2878,6 +3020,7 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->circuit_open_rejections = ipc_diag_circuit_open_rejections;
     diagnostics->trace_events_recorded=ipc_trace_next_sequence-1U;
     diagnostics->trace_events_overwritten=ipc_trace_overwritten;
+    diagnostics->rate_limited_messages = ipc_diag_rate_limited_messages;
     diagnostics->trace_events_pending=ipc_trace_count;
     diagnostics->dead_letters_pending = ipc_dead_letter_count;
     diagnostics->pending_deliveries = 0U;
