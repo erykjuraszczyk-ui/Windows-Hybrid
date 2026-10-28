@@ -2719,6 +2719,7 @@ bool scheduler_ipc_fair_admission_self_test(void) {
         !scheduler_ipc_service_set_priority_admission(destination, true) ||
         scheduler_ipc_service_set_source_quota(destination, SCHEDULER_IPC_CAPACITY + 1U))
         return false;
+    serial_write("HYBRID: FAIR_DEBUG_REGISTER_OK\n");
     scheduler_ipc_diagnostics_t before = {0}, after = {0};
     scheduler_ipc_get_diagnostics(&before);
     scheduler_ipc_message_t message = {0};
@@ -2731,6 +2732,7 @@ bool scheduler_ipc_fair_admission_self_test(void) {
     }
     if (scheduler_ipc_service_send_ex(low, destination, 103U, &message) !=
         SCHEDULER_IPC_DELIVERY_SOURCE_QUOTA) return false;
+    serial_write("HYBRID: FAIR_DEBUG_QUOTA_OK\n");
     const uint32_t medium_ids[2] = {201U, 202U};
     for (uint32_t i = 0U; i < 2U; ++i) {
         if (scheduler_ipc_service_send_ex(medium, destination, medium_ids[i], &message) !=
@@ -2738,12 +2740,14 @@ bool scheduler_ipc_fair_admission_self_test(void) {
     }
     if (scheduler_ipc_service_send_ex(high, destination, 901U, &message) !=
         SCHEDULER_IPC_DELIVERY_PRIORITY_PREEMPTED) return false;
+    serial_write("HYBRID: FAIR_DEBUG_PRIORITY_OK\n");
     scheduler_ipc_service_info_t info = {0};
     if (!scheduler_ipc_service_get_info(destination, &info) ||
         info.queued_messages != SCHEDULER_IPC_CAPACITY ||
         info.max_messages_per_source != 2U || !info.priority_admission_enabled ||
         info.source_quota_rejections != 1U || info.priority_preemptions != 1U)
         return false;
+    serial_write("HYBRID: FAIR_DEBUG_INFO_OK\n");
     scheduler_ipc_message_t received = {0};
     const uint32_t expected[4] = {102U, 201U, 901U, 202U};
     const scheduler_ipc_service_id_t expected_sources[4] = {low, medium, high, medium};
@@ -2751,6 +2755,7 @@ bool scheduler_ipc_fair_admission_self_test(void) {
         if (!scheduler_ipc_service_receive(destination, &received) ||
             received.request_id != expected[i] ||
             received.source_service_id != expected_sources[i]) return false;
+    serial_write("HYBRID: FAIR_DEBUG_RECEIVE_OK\n");
     }
     scheduler_ipc_get_diagnostics(&after);
     const bool diag_ok =
@@ -2760,6 +2765,8 @@ bool scheduler_ipc_fair_admission_self_test(void) {
     const bool cleanup = scheduler_ipc_service_unregister(destination) &&
         scheduler_ipc_service_unregister(high) && scheduler_ipc_service_unregister(medium) &&
         scheduler_ipc_service_unregister(low) && scheduler_ipc_service_count() == 0U;
+    serial_write(diag_ok ? "HYBRID: FAIR_DEBUG_DIAG_OK\n" : "HYBRID: FAIR_DEBUG_DIAG_FAIL\n");
+    serial_write(cleanup ? "HYBRID: FAIR_DEBUG_CLEANUP_OK\n" : "HYBRID: FAIR_DEBUG_CLEANUP_FAIL\n");
     return diag_ok && cleanup;
 }
 
