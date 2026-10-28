@@ -373,6 +373,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: IPC_TRACE_SELFTEST_OK\n");
+    if (!scheduler_ipc_rate_limit_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_RATE_LIMIT\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_RATE_LIMIT_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||
