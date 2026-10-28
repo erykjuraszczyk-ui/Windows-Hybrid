@@ -24,6 +24,7 @@ typedef enum {
 #define SCHEDULER_IPC_MAX_TRACKED_DELIVERIES 8U
 #define SCHEDULER_IPC_DELIVERY_HISTORY 16U
 #define SCHEDULER_IPC_DEAD_LETTER_CAPACITY 8U
+#define SCHEDULER_IPC_TRACE_CAPACITY 32U
 #define SCHEDULER_IPC_DEFAULT_CIRCUIT_FAILURE_THRESHOLD 3U
 #define SCHEDULER_IPC_PRIORITY_MIN 1U
 #define SCHEDULER_IPC_PRIORITY_MAX 8U
@@ -152,6 +153,8 @@ typedef struct {
     scheduler_ipc_delivery_result_t reason;
     uint64_t recorded_tick;
 } scheduler_ipc_dead_letter_t;
+typedef enum { SCHEDULER_IPC_TRACE_SEND=1U, SCHEDULER_IPC_TRACE_RECEIVE=2U, SCHEDULER_IPC_TRACE_ACK=3U, SCHEDULER_IPC_TRACE_RETRY=4U, SCHEDULER_IPC_TRACE_DEADLINE=5U, SCHEDULER_IPC_TRACE_CIRCUIT=6U, SCHEDULER_IPC_TRACE_BACKPRESSURE=7U, SCHEDULER_IPC_TRACE_DEAD_LETTER=8U } scheduler_ipc_trace_kind_t;
+typedef struct { uint64_t sequence, tick; scheduler_ipc_trace_kind_t kind; scheduler_ipc_service_id_t source_service_id, destination_service_id; uint32_t request_id, delivery_id; scheduler_ipc_delivery_result_t result; uint32_t queue_depth; } scheduler_ipc_trace_event_t;
 typedef struct {
     uint64_t calls_started;
     uint64_t calls_completed;
@@ -182,6 +185,8 @@ typedef struct {
     uint64_t circuit_breaker_trips;
     uint64_t circuit_breaker_recoveries;
     uint64_t circuit_open_rejections;
+    uint64_t trace_events_recorded, trace_events_overwritten;
+    uint32_t trace_events_pending;
     uint32_t dead_letters_pending;
     uint32_t pending_deliveries;
     uint32_t max_queue_depth;
@@ -329,6 +334,9 @@ bool scheduler_ipc_service_call(scheduler_ipc_service_id_t source_service_id,
 bool scheduler_ipc_call_cancel(scheduler_ipc_service_id_t source_service_id,
                                uint32_t request_id);
 uint32_t scheduler_ipc_pending_call_count(void);
+uint32_t scheduler_ipc_trace_count(void);
+bool scheduler_ipc_trace_read(uint32_t oldest_first_offset, scheduler_ipc_trace_event_t *event);
+bool scheduler_ipc_trace_self_test(void);
 void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics);
 bool scheduler_ipc_runtime_self_test(void);
 bool scheduler_ipc_lifecycle_self_test(void);
