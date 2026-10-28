@@ -368,6 +368,11 @@ void kmain(void) {
         return;
     }
     serial_write("HYBRID: IPC_CIRCUIT_BREAKER_SELFTEST_OK\n");
+    if (!scheduler_ipc_trace_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_TRACE\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_TRACE_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||

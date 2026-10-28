@@ -211,3 +211,15 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 - QEMU self-test sprawdza priorytety, selekcję adaptacyjną, odrzucenie przy przeciążeniu i zwolnienie stanu po opróżnieniu kolejki.
 
 Ograniczenia: dobór celu odbywa się wyłącznie w podanej grupie usług; to nie jest globalny scheduler. Metryka bazuje na głębokości kolejki, nie na czasie CPU ani latencji end-to-end. Kernel pozostaje jednordzeniowym Ring 0.
+
+
+## HYBRID OS v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics
+
+**Status: CI pending.** Wymagany marker: `HYBRID: IPC_TRACE_SELFTEST_OK`.
+
+- Stały ring trace o pojemności 32 rekordów zapisuje sekwencję, tick PIT, typ zdarzenia, endpointy, request ID, delivery ID, wynik i głębokość kolejki; payload nie jest kopiowany.
+- Rejestrowane są zdarzenia SEND, RECEIVE, ACK, przejście circuit breaker do OPEN, deadline i dead-letter.
+- `scheduler_ipc_trace_count()` i `scheduler_ipc_trace_read(offset, &event)` udostępniają ślad od najstarszego wpisu. Diagnostyka raportuje liczbę rekordów, nadpisań i rekordów oczekujących.
+- Test QEMU weryfikuje monotoniczne sequence i korelację SEND → RECEIVE → ACK.
+
+Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja pozostaje jednordzeniowa; to nie jest trwały dziennik audytowy.

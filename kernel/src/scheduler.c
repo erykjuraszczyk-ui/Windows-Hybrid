@@ -50,6 +50,9 @@ static uint64_t ipc_diag_calls_service_unavailable;
 static uint64_t ipc_diag_calls_send_failed;
 static uint64_t ipc_diag_replies_dropped;
 static uint64_t ipc_diag_services_closed;
+static scheduler_ipc_trace_event_t ipc_trace_events[SCHEDULER_IPC_TRACE_CAPACITY];
+static uint64_t ipc_trace_next_sequence=1U, ipc_trace_overwritten;
+static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
 static uint32_t ipc_expired_history_cursor;
@@ -90,6 +93,22 @@ static uint64_t scheduler_irq_save_disable(void) {
 static void scheduler_irq_restore(uint64_t flags) {
     if ((flags & (UINT64_C(1) << 9U)) != 0U)
         __asm__ volatile ("sti" : : : "memory");
+}
+static void scheduler_ipc_trace_record_locked(scheduler_ipc_trace_kind_t kind,
+        scheduler_ipc_service_id_t source, scheduler_ipc_service_id_t destination,
+        uint32_t request_id, uint32_t delivery_id, scheduler_ipc_delivery_result_t result,
+        uint32_t queue_depth) {
+    if (ipc_trace_count == SCHEDULER_IPC_TRACE_CAPACITY) {
+        ipc_trace_head=(ipc_trace_head+1U)%SCHEDULER_IPC_TRACE_CAPACITY;
+        --ipc_trace_count; ++ipc_trace_overwritten;
+    }
+    const uint32_t index=(ipc_trace_head+ipc_trace_count)%SCHEDULER_IPC_TRACE_CAPACITY;
+    ipc_trace_events[index].sequence=ipc_trace_next_sequence++;
+    if (ipc_trace_next_sequence==0U) ipc_trace_next_sequence=UINT64_MAX;
+    ipc_trace_events[index].tick=interrupts_ticks(); ipc_trace_events[index].kind=kind;
+    ipc_trace_events[index].source_service_id=source; ipc_trace_events[index].destination_service_id=destination;
+    ipc_trace_events[index].request_id=request_id; ipc_trace_events[index].delivery_id=delivery_id;
+    ipc_trace_events[index].result=result; ipc_trace_events[index].queue_depth=queue_depth; ++ipc_trace_count;
 }
 
 static uint32_t find_unused_slot(void) {
@@ -1590,6 +1609,7 @@ static void scheduler_ipc_service_report_locked(scheduler_ipc_service_t *service
     if (service->breaker_failure_threshold != 0U &&
         (half_open_failure || service->consecutive_failures >= service->breaker_failure_threshold)) {
         service->circuit_state = SCHEDULER_IPC_CIRCUIT_OPEN;
+        scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_CIRCUIT,0U,service->id,0U,0U,SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN,service->channel.count);
         service->breaker_open_until_tick = scheduler_ipc_tick_add_saturating(
             now, service->breaker_reset_timeout_ticks);
         service->half_open_probe_in_flight = false;
@@ -1617,6 +1637,7 @@ static void scheduler_ipc_dead_letter_enqueue_locked(
     ipc_dead_letters[index].recorded_tick = now;
     ++ipc_dead_letter_count;
     ++ipc_diag_dead_letters_enqueued;
+    scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_DEAD_LETTER,track->receipt.source_service_id,track->receipt.destination_service_id,track->receipt.request_id,track->receipt.delivery_id,reason,ipc_dead_letter_count);
     track->dead_lettered = true;
 }
 
@@ -1705,6 +1726,7 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     if (channel->readers.waiters != 0U)
         (void)wait_queue_wake_one_locked(&channel->readers);
     scheduler_ipc_service_report_locked(destination, true, interrupts_ticks());
+    scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_SEND,source_service_id,destination_service_id,request_id,forwarded.delivery_id,result,channel->count);
     scheduler_irq_restore(flags);
     return result;
 }
@@ -1773,6 +1795,7 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
         if (service->congestion_control_enabled && service->congested &&
             service->channel.count <= service->congestion_low_watermark)
             service->congested = false;
+        scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_RECEIVE,message->source_service_id,service_id,message->request_id,message->delivery_id,SCHEDULER_IPC_DELIVERY_DELIVERED,service->channel.count);
         if (message->delivery_id != 0U) {
             service->received_delivery_ids[service->received_delivery_cursor] = message->delivery_id;
             service->received_delivery_cursor =
@@ -1910,6 +1933,7 @@ bool scheduler_ipc_service_ack_delivery(scheduler_ipc_service_id_t destination_s
     track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_ACKNOWLEDGED;
     track->receipt.last_result = SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED;
     ++ipc_diag_deliveries_acknowledged;
+    scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_ACK,track->receipt.source_service_id,destination_service_id,track->receipt.request_id,delivery_id,SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED,destination->channel.count);
     scheduler_irq_restore(flags);
     return true;
 }
@@ -2082,6 +2106,7 @@ static void scheduler_ipc_process_delivery_timers(uint64_t now) {
             track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXPIRED;
             track->receipt.last_result = SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED;
             ++ipc_diag_delivery_deadlines_expired;
+            scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_DEADLINE,track->receipt.source_service_id,track->receipt.destination_service_id,track->receipt.request_id,track->receipt.delivery_id,SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED,0U);
             scheduler_ipc_dead_letter_enqueue_locked(track,
                 SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED, now);
             scheduler_irq_restore(flags);
@@ -2466,6 +2491,33 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
     return stats_ok && unregistered;
 }
 
+
+bool scheduler_ipc_trace_self_test(void) {
+    scheduler_ipc_service_id_t src=0U,dst=0U;
+    if(!scheduler_ipc_service_register_ex("trace.source",SCHEDULER_IPC_SERVICE_CAP_ONE_WAY,&src) ||
+       !scheduler_ipc_service_register_ex("trace.dest",SCHEDULER_IPC_SERVICE_CAP_ONE_WAY,&dst)) return false;
+    scheduler_ipc_message_t msg={0}; msg.type=UINT32_C(0x54524345); msg.length=1U; msg.payload[0]=UINT8_C(0x42);
+    const uint32_t id=UINT32_C(0x18000101);
+    if(scheduler_ipc_service_send_reliable(src,dst,id,81U,&msg,3U)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    scheduler_ipc_message_t got={0};
+    if(!scheduler_ipc_service_receive(dst,&got)||got.delivery_id!=id||!scheduler_ipc_service_ack_delivery(dst,id)) return false;
+    const uint32_t count=scheduler_ipc_trace_count();
+    if(count==0U||count>SCHEDULER_IPC_TRACE_CAPACITY) return false;
+    bool sent=false,received=false,acked=false; uint64_t previous=0U;
+    for(uint32_t i=0;i<count;++i){scheduler_ipc_trace_event_t e={0};
+        if (!scheduler_ipc_trace_read(i, &e) || e.sequence <= previous || e.tick == 0U) return false;
+        previous = e.sequence;
+        if(e.delivery_id!=id)continue;
+        if(e.kind==SCHEDULER_IPC_TRACE_SEND&&e.source_service_id==src&&e.destination_service_id==dst)sent=true;
+        if(e.kind==SCHEDULER_IPC_TRACE_RECEIVE&&e.destination_service_id==dst)received=true;
+        if(e.kind==SCHEDULER_IPC_TRACE_ACK&&e.destination_service_id==dst)acked=true;
+    }
+    scheduler_ipc_diagnostics_t d={0}; scheduler_ipc_get_diagnostics(&d);
+    const bool stats=d.trace_events_recorded>=count&&d.trace_events_pending==count;
+    const bool cleanup=scheduler_ipc_service_unregister(dst)&&scheduler_ipc_service_unregister(src);
+    return sent&&received&&acked&&stats&&cleanup;
+}
+
 bool scheduler_ipc_service_reply(scheduler_ipc_service_id_t responder_service_id,
                                  const scheduler_ipc_message_t *request,
                                  const scheduler_ipc_message_t *response,
@@ -2773,6 +2825,25 @@ uint32_t scheduler_ipc_pending_call_count(void) {
     return count;
 }
 
+uint32_t scheduler_ipc_trace_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t count = ipc_trace_count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
+bool scheduler_ipc_trace_read(uint32_t offset, scheduler_ipc_trace_event_t *event) {
+    if (event == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (offset >= ipc_trace_count) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    *event = ipc_trace_events[(ipc_trace_head + offset) % SCHEDULER_IPC_TRACE_CAPACITY];
+    scheduler_irq_restore(flags);
+    return true;
+}
+
 void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     if (diagnostics == NULL) return;
     const uint64_t flags = scheduler_irq_save_disable();
@@ -2805,6 +2876,9 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->circuit_breaker_trips = ipc_diag_circuit_breaker_trips;
     diagnostics->circuit_breaker_recoveries = ipc_diag_circuit_breaker_recoveries;
     diagnostics->circuit_open_rejections = ipc_diag_circuit_open_rejections;
+    diagnostics->trace_events_recorded=ipc_trace_next_sequence-1U;
+    diagnostics->trace_events_overwritten=ipc_trace_overwritten;
+    diagnostics->trace_events_pending=ipc_trace_count;
     diagnostics->dead_letters_pending = ipc_dead_letter_count;
     diagnostics->pending_deliveries = 0U;
     diagnostics->max_queue_depth = ipc_diag_max_queue_depth;
