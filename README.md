@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.20.0 — IPC Fair Scheduling, Per-Source Quotas & Priority-Aware Admission; CI PASS po scaleniu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40680724904)).
+**Aktualny etap:** v0.21.0 — IPC Deadline-Aware Scheduling, Starvation Prevention & QoS Profiles; walidacja CI w toku.
 
 ## Historia statusu
 
@@ -24,6 +24,7 @@
 - **v0.18.0 — walidacja oczekuje:** bounded event trace IPC i korelacja zdarzeń.
 - **v0.19.0 — CI PASS po scaleniu:** token bucket, limity burst/refill, kontrola dopuszczenia wiadomości i diagnostyka odrzuceń ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40667570897)).
 - **v0.20.0 — CI PASS po scaleniu:** fair scheduling per źródło, limity kolejkowania per źródło i admission zależne od priorytetu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40680724904)).
+- **v0.21.0 — walidacja CI w toku:** deadline-aware scheduling, starvation prevention i profile QoS.
 - **v0.12.0 — CI PASS po scaleniu:** zamykanie usług, kończenie powiązanych wywołań i liczniki diagnostyczne.
 
 ## Potwierdzenie v0.5.0
