@@ -859,7 +859,7 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
                 const scheduler_ipc_message_t *candidate_message = &channel->messages[index];
                 const uint64_t enqueued = candidate_message->enqueue_tick;
-                if (channel->starvation_threshold_ticks != 0U && enqueued != 0U && now_tick >= enqueued &&
+                if (channel->starvation_threshold_ticks != 0U && now_tick >= enqueued &&
                     now_tick - enqueued >= channel->starvation_threshold_ticks && enqueued < oldest_aged_tick) {
                     oldest_aged_tick = enqueued; selected_offset = offset; selected_by_starvation = true;
                 }
@@ -875,6 +875,7 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 if (candidate > channel->last_served_source_service_id && candidate < next_source)
                     next_source = candidate;
             }
+            if (selected_by_starvation) selected_by_deadline = false;
             if (!selected_by_starvation && !selected_by_deadline) {
                 uint64_t best_deadline = UINT64_MAX; bool has_deadline = false;
                 for (uint32_t offset = 0U; offset < channel->count; ++offset) {
