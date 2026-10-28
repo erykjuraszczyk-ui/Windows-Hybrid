@@ -69,3 +69,5 @@ Kolejny numer nie zamyka poprzedniego etapu automatycznie. Funkcja jest gotowa d
 
 | v0.18.0 | Ograniczony event trace IPC, telemetria diagnostyczna, korelacja zdarzeń i regresja QEMU; CI PASS po scaleniu |
 | v0.19.0 | Token-bucket rate limiting per usługa, burst/refill w tickach PIT, admission control i diagnostyka; CI PASS na gałęzi funkcji ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40667252501)) |
+
+| v0.20.0 | Fair scheduling źródeł przy odbiorze, limity per-source, preempcja wiadomości o niższym priorytecie i diagnostyka; CI pending |
