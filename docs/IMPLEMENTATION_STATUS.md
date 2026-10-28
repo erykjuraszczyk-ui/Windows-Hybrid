@@ -211,3 +211,16 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 - QEMU self-test sprawdza priorytety, selekcję adaptacyjną, odrzucenie przy przeciążeniu i zwolnienie stanu po opróżnieniu kolejki.
 
 Ograniczenia: dobór celu odbywa się wyłącznie w podanej grupie usług; to nie jest globalny scheduler. Metryka bazuje na głębokości kolejki, nie na czasie CPU ani latencji end-to-end. Kernel pozostaje jednordzeniowym Ring 0.
+
+
+## HYBRID OS v0.18.0 — IPC Token-Bucket Rate Limiting & Admission Control
+
+**Status: CI pending.** Wersję można oznaczyć jako PASS dopiero po przejściu builda ISO oraz testu QEMU dla aktualnego commita.
+
+- `scheduler_ipc_service_set_rate_limit(service_id, burst_capacity, refill_tokens, refill_interval_ticks)` konfiguruje ogranicznik token-bucket po stronie odbiorcy. Koszt każdej zaakceptowanej wiadomości wynosi jeden token; bucket startuje pełny.
+- `scheduler_ipc_service_send_ex()` uzupełnia tokeny na podstawie upływu ticków PIT, ogranicza ich liczbę do burst capacity i zwraca `SCHEDULER_IPC_DELIVERY_RATE_LIMITED`, gdy bucket jest pusty. Odrzucenie następuje przed zapisem do kolejki, więc wiadomość nie jest częściowo przyjmowana.
+- Konfiguracja jest wyłączona domyślnie, zachowując kompatybilność istniejących usług. Limit ma stałą pamięć, nie wymaga dynamicznej alokacji i działa w sekcji krytycznej chronionej przez wyłączenie przerwań dla obecnego single-core kernela.
+- `scheduler_ipc_service_info_t` i `scheduler_ipc_diagnostics_t` raportują stan tokenów oraz liczbę odrzuceń przez limiter.
+- QEMU self-test sprawdza walidację parametrów, zużycie burstu, odrzucenie bez tokenów, odnowienie tokenów po tickach PIT, kolejność wiadomości i diagnostykę.
+
+**Ograniczenia:** refill opiera się na tickach PIT, nie na zegarze czasu rzeczywistego. To admission control per odbiorca, a nie limitowanie per nadawca; wszystkie źródła współdzielą bucket celu. Nadal brak SMP safety, izolacji Ring 3 i trwałych liczników po restarcie.
