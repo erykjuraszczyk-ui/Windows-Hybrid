@@ -1670,7 +1670,8 @@ static void scheduler_ipc_record_enqueue_locked(scheduler_ipc_service_t *service
 
 static bool scheduler_ipc_delivery_accepted(scheduler_ipc_delivery_result_t result) {
     return result == SCHEDULER_IPC_DELIVERY_DELIVERED ||
-           result == SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST;
+           result == SCHEDULER_IPC_DELIVERY_DELIVERED_DROPPED_OLDEST ||
+           result == SCHEDULER_IPC_DELIVERY_PRIORITY_PREEMPTED;
 }
 
 static scheduler_ipc_delivery_track_t *scheduler_ipc_find_delivery_locked(uint32_t delivery_id) {
