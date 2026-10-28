@@ -749,6 +749,7 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
     channel->readers.waiters = 0U;
     channel->writers.waiters = 0U;
     channel->last_served_source_service_id = 0U;
+    channel->starvation_threshold_ticks = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
         channel->messages[i].type = 0U;
         channel->messages[i].length = 0U;
@@ -757,6 +758,10 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
         channel->messages[i].status = SCHEDULER_IPC_STATUS_OK;
         channel->messages[i].source_service_id = 0U;
         channel->messages[i].request_id = 0U;
+        channel->messages[i].delivery_id = 0U;
+        channel->messages[i].enqueue_tick = 0U;
+        channel->messages[i].deadline_tick = 0U;
+        channel->messages[i].qos_profile = SCHEDULER_IPC_QOS_NORMAL;
         for (uint32_t j = 0U; j < SCHEDULER_IPC_PAYLOAD_SIZE; ++j)
             channel->messages[i].payload[j] = 0U;
     }
@@ -777,6 +782,9 @@ static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
     destination->source_service_id = source->source_service_id;
     destination->request_id = source->request_id;
     destination->delivery_id = source->delivery_id;
+    destination->enqueue_tick = source->enqueue_tick;
+    destination->deadline_tick = source->deadline_tick;
+    destination->qos_profile = source->qos_profile;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
         destination->payload[i] = source->payload[i];
 }
@@ -833,31 +841,77 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
         }
         if (channel->count > 0U) {
             uint32_t selected_offset = 0U;
+            bool selected_by_deadline = false, selected_by_starvation = false;
+            const uint64_t now_tick = interrupts_ticks();
+            uint64_t oldest_aged_tick = UINT64_MAX, earliest_deadline_tick = UINT64_MAX;
+            uint32_t highest_qos = 0U;
             scheduler_ipc_service_id_t selected_source = 0U;
             scheduler_ipc_service_id_t smallest_source = UINT32_MAX;
             scheduler_ipc_service_id_t next_source = UINT32_MAX;
             bool has_nonzero_sources = false;
             for (uint32_t offset = 0U; offset < channel->count; ++offset) {
                 const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
-                const scheduler_ipc_service_id_t candidate = channel->messages[index].source_service_id;
+                const scheduler_ipc_message_t *candidate_message = &channel->messages[index];
+                const uint64_t enqueued = candidate_message->enqueue_tick;
+                if (channel->starvation_threshold_ticks != 0U && enqueued != 0U && now_tick >= enqueued &&
+                    now_tick - enqueued >= channel->starvation_threshold_ticks && enqueued < oldest_aged_tick) {
+                    oldest_aged_tick = enqueued; selected_offset = offset; selected_by_starvation = true;
+                }
+                if (candidate_message->deadline_tick != 0U && candidate_message->deadline_tick < earliest_deadline_tick) {
+                    earliest_deadline_tick = candidate_message->deadline_tick;
+                    if (!selected_by_starvation) { selected_offset = offset; selected_by_deadline = true; }
+                }
+                if ((uint32_t)candidate_message->qos_profile > highest_qos) highest_qos = (uint32_t)candidate_message->qos_profile;
+                const scheduler_ipc_service_id_t candidate = candidate_message->source_service_id;
                 if (candidate == 0U) continue;
                 has_nonzero_sources = true;
                 if (candidate < smallest_source) smallest_source = candidate;
                 if (candidate > channel->last_served_source_service_id && candidate < next_source)
                     next_source = candidate;
             }
-            if (has_nonzero_sources) {
-                selected_source = next_source != UINT32_MAX ? next_source : smallest_source;
+            if (!selected_by_starvation && !selected_by_deadline) {
+                uint64_t best_deadline = UINT64_MAX; bool has_deadline = false;
                 for (uint32_t offset = 0U; offset < channel->count; ++offset) {
                     const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
-                    if (channel->messages[index].source_service_id == selected_source) {
-                        selected_offset = offset;
-                        break;
+                    const scheduler_ipc_message_t *candidate = &channel->messages[index];
+                    if (candidate->deadline_tick != 0U && candidate->deadline_tick < best_deadline) {
+                        best_deadline = candidate->deadline_tick; selected_offset = offset; has_deadline = true;
                     }
                 }
-                channel->last_served_source_service_id = selected_source;
-                if (selected_offset != 0U) ++ipc_diag_fair_receive_selections;
+                selected_by_deadline = has_deadline;
             }
+            if (!selected_by_starvation && !selected_by_deadline) {
+                bool found_profile = false;
+                for (uint32_t offset = 0U; offset < channel->count; ++offset) {
+                    const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
+                    if ((uint32_t)channel->messages[index].qos_profile == highest_qos) {
+                        if (!found_profile) selected_offset = offset; found_profile = true;
+                    }
+                }
+                if (highest_qos > (uint32_t)SCHEDULER_IPC_QOS_BEST_EFFORT) ++ipc_diag_qos_profile_selections;
+                next_source = UINT32_MAX; smallest_source = UINT32_MAX; has_nonzero_sources = false;
+                for (uint32_t offset = 0U; offset < channel->count; ++offset) {
+                    const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
+                    const scheduler_ipc_message_t *candidate = &channel->messages[index];
+                    if ((uint32_t)candidate->qos_profile != highest_qos) continue;
+                    const scheduler_ipc_service_id_t cs = candidate->source_service_id;
+                    if (cs == 0U) continue; has_nonzero_sources = true;
+                    if (cs < smallest_source) smallest_source = cs;
+                    if (cs > channel->last_served_source_service_id && cs < next_source) next_source = cs;
+                }
+                if (has_nonzero_sources) {
+                    selected_source = next_source != UINT32_MAX ? next_source : smallest_source;
+                    for (uint32_t offset = 0U; offset < channel->count; ++offset) {
+                        const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
+                        if (channel->messages[index].source_service_id == selected_source &&
+                            (uint32_t)channel->messages[index].qos_profile == highest_qos) { selected_offset = offset; break; }
+                    }
+                    channel->last_served_source_service_id = selected_source;
+                    if (selected_offset != 0U) ++ipc_diag_fair_receive_selections;
+                }
+            }
+            if (selected_by_starvation) ++ipc_diag_starvation_preventions;
+            if (selected_by_deadline) ++ipc_diag_deadline_aware_selections;
             const uint32_t selected_index = (channel->head + selected_offset) % SCHEDULER_IPC_CAPACITY;
             scheduler_ipc_message_copy(message, &channel->messages[selected_index]);
             for (uint32_t offset = selected_offset; offset + 1U < channel->count; ++offset) {
@@ -1052,6 +1106,11 @@ typedef struct {
     uint64_t rate_limit_refill_interval_ticks;
     uint64_t rate_limit_last_refill_tick;
     uint64_t rate_limited_messages;
+    scheduler_ipc_qos_profile_t qos_profile;
+    uint64_t default_deadline_budget_ticks;
+    uint64_t deadline_aware_selections;
+    uint64_t starvation_preventions;
+    uint64_t qos_profile_selections;
     scheduler_ipc_circuit_state_t circuit_state;
     scheduler_ipc_health_state_t health_state;
     uint32_t breaker_failure_threshold;
@@ -1106,6 +1165,9 @@ static uint64_t ipc_diag_circuit_open_rejections;
 static uint64_t ipc_diag_rate_limited_messages;
 static uint64_t ipc_diag_source_quota_rejections;
 static uint64_t ipc_diag_priority_preemptions;
+static uint64_t ipc_diag_deadline_aware_selections;
+static uint64_t ipc_diag_starvation_preventions;
+static uint64_t ipc_diag_qos_profile_selections;
 static scheduler_ipc_dead_letter_t ipc_dead_letters[SCHEDULER_IPC_DEAD_LETTER_CAPACITY];
 static uint32_t ipc_dead_letter_head;
 static uint32_t ipc_dead_letter_count;
@@ -1274,6 +1336,11 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     free_slot->queue_high_watermark = 0U;
     free_slot->priority = 1U;
+    free_slot->qos_profile = SCHEDULER_IPC_QOS_NORMAL;
+    free_slot->default_deadline_budget_ticks = 0U;
+    free_slot->deadline_aware_selections = 0U;
+    free_slot->starvation_preventions = 0U;
+    free_slot->qos_profile_selections = 0U;
     free_slot->max_messages_per_source = 0U;
     free_slot->priority_admission_enabled = false;
     free_slot->source_quota_rejections = 0U;
@@ -1362,6 +1429,12 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->rate_limit_tokens = service->rate_limit_tokens;
     info->rate_limit_capacity = service->rate_limit_capacity;
     info->rate_limited_messages = service->rate_limited_messages;
+    info->qos_profile = service->qos_profile;
+    info->default_deadline_budget_ticks = service->default_deadline_budget_ticks;
+    info->starvation_threshold_ticks = service->channel.starvation_threshold_ticks;
+    info->deadline_aware_selections = service->deadline_aware_selections;
+    info->starvation_preventions = service->starvation_preventions;
+    info->qos_profile_selections = service->qos_profile_selections;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_SERVICE_NAME_SIZE; ++i)
         info->name[i] = service->name[i];
 }
@@ -1491,6 +1564,23 @@ bool scheduler_ipc_service_set_priority_admission(scheduler_ipc_service_id_t ser
         return false;
     }
     service->priority_admission_enabled = enabled;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_set_qos_profile(scheduler_ipc_service_id_t service_id,
+                                           scheduler_ipc_qos_profile_t profile,
+                                           uint64_t default_deadline_budget_ticks,
+                                           uint64_t starvation_threshold_ticks) {
+    if (profile < SCHEDULER_IPC_QOS_BEST_EFFORT ||
+        profile > SCHEDULER_IPC_QOS_DEADLINE_CRITICAL ||
+        (profile == SCHEDULER_IPC_QOS_DEADLINE_CRITICAL && default_deadline_budget_ticks == 0U)) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) { scheduler_irq_restore(flags); return false; }
+    service->qos_profile = profile;
+    service->default_deadline_budget_ticks = default_deadline_budget_ticks;
+    service->channel.starvation_threshold_ticks = starvation_threshold_ticks;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -1925,6 +2015,10 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     scheduler_ipc_message_copy(&forwarded, message);
     forwarded.source_service_id = source_service_id;
     forwarded.request_id = request_id;
+    forwarded.enqueue_tick = now;
+    forwarded.qos_profile = source->qos_profile;
+    if (forwarded.deadline_tick == 0U && source->default_deadline_budget_ticks != 0U)
+        forwarded.deadline_tick = scheduler_ipc_tick_add_saturating(now, source->default_deadline_budget_ticks);
     scheduler_ipc_message_copy(&channel->messages[channel->tail], &forwarded);
     channel->tail = (channel->tail + 1U) % SCHEDULER_IPC_CAPACITY;
     ++channel->count;
@@ -2703,6 +2797,51 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 
+
+bool scheduler_ipc_deadline_qos_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t best_effort=0U, deadline=0U, destination=0U;
+    const uint32_t caps=SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("qos.best",caps,&best_effort) ||
+        !scheduler_ipc_service_register_ex("qos.deadline",caps,&deadline) ||
+        !scheduler_ipc_service_register_ex("qos.dst",caps,&destination)) return false;
+    if (!scheduler_ipc_service_set_qos_profile(best_effort,SCHEDULER_IPC_QOS_BEST_EFFORT,0U,0U) ||
+        !scheduler_ipc_service_set_qos_profile(deadline,SCHEDULER_IPC_QOS_DEADLINE_CRITICAL,40U,0U) ||
+        !scheduler_ipc_service_set_qos_profile(destination,SCHEDULER_IPC_QOS_NORMAL,0U,20U) ||
+        scheduler_ipc_service_set_qos_profile(deadline,SCHEDULER_IPC_QOS_DEADLINE_CRITICAL,0U,0U)) return false;
+    scheduler_ipc_diagnostics_t before={0},after={0}; scheduler_ipc_get_diagnostics(&before);
+    scheduler_ipc_message_t message={0},received={0};
+    message.type=UINT32_C(0x514F5331); message.length=1U; message.payload[0]=UINT8_C(0x5A);
+    if (scheduler_ipc_service_send_ex(best_effort,destination,101U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    message.deadline_tick=interrupts_ticks()+100U;
+    if (scheduler_ipc_service_send_ex(deadline,destination,201U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=201U||
+        received.qos_profile!=SCHEDULER_IPC_QOS_DEADLINE_CRITICAL||received.deadline_tick==0U) return false;
+    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=101U||
+        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) return false;
+    message.deadline_tick=0U;
+    if (scheduler_ipc_service_send_ex(best_effort,destination,102U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    const uint64_t target=interrupts_ticks()+25U; interrupts_enable();
+    const bool waited=interrupts_wait_for_ticks(target); interrupts_disable(); if(!waited)return false;
+    message.deadline_tick=interrupts_ticks()+1U;
+    if (scheduler_ipc_service_send_ex(deadline,destination,202U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=102U||
+        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) return false;
+    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=202U) return false;
+    scheduler_ipc_service_info_t info={0};
+    if (!scheduler_ipc_service_get_info(destination,&info)||info.starvation_threshold_ticks!=20U||
+        info.starvation_preventions==0U||info.deadline_aware_selections==0U||
+        !scheduler_ipc_service_get_info(deadline,&info)||info.qos_profile!=SCHEDULER_IPC_QOS_DEADLINE_CRITICAL||
+        info.default_deadline_budget_ticks!=40U) return false;
+    scheduler_ipc_get_diagnostics(&after);
+    const bool diag=after.deadline_aware_selections>before.deadline_aware_selections&&
+        after.starvation_preventions>before.starvation_preventions&&
+        after.qos_profile_selections>before.qos_profile_selections&&scheduler_ipc_service_count()==3U;
+    const bool cleanup=scheduler_ipc_service_unregister(destination)&&scheduler_ipc_service_unregister(deadline)&&
+        scheduler_ipc_service_unregister(best_effort)&&scheduler_ipc_service_count()==0U;
+    return diag&&cleanup;
+}
+
 bool scheduler_ipc_fair_admission_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t low = 0U, medium = 0U, high = 0U, destination = 0U;
@@ -3210,6 +3349,9 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->source_quota_rejections = ipc_diag_source_quota_rejections;
     diagnostics->priority_preemptions = ipc_diag_priority_preemptions;
     diagnostics->fair_receive_selections = ipc_diag_fair_receive_selections;
+    diagnostics->deadline_aware_selections = ipc_diag_deadline_aware_selections;
+    diagnostics->starvation_preventions = ipc_diag_starvation_preventions;
+    diagnostics->qos_profile_selections = ipc_diag_qos_profile_selections;
     diagnostics->trace_events_pending=ipc_trace_count;
     diagnostics->dead_letters_pending = ipc_dead_letter_count;
     diagnostics->pending_deliveries = 0U;
