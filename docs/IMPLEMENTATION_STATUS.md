@@ -215,7 +215,7 @@ Ograniczenia: dobór celu odbywa się wyłącznie w podanej grupie usług; to ni
 
 ## HYBRID OS v0.18.0 — IPC Token-Bucket Rate Limiting & Admission Control
 
-**Status: CI pending.** Wersję można oznaczyć jako PASS dopiero po przejściu builda ISO oraz testu QEMU dla aktualnego commita.
+**Status: CI PASS na gałęzi funkcji.** Przebieg [GitHub Actions #40666400100](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40666400100) zbudował ISO i potwierdził `IPC_RATE_LIMIT_SELFTEST_OK`, `BOOT_OK` oraz końcowy marker `PASS`.
 
 - `scheduler_ipc_service_set_rate_limit(service_id, burst_capacity, refill_tokens, refill_interval_ticks)` konfiguruje ogranicznik token-bucket po stronie odbiorcy. Koszt każdej zaakceptowanej wiadomości wynosi jeden token; bucket startuje pełny.
 - `scheduler_ipc_service_send_ex()` uzupełnia tokeny na podstawie upływu ticków PIT, ogranicza ich liczbę do burst capacity i zwraca `SCHEDULER_IPC_DELIVERY_RATE_LIMITED`, gdy bucket jest pusty. Odrzucenie następuje przed zapisem do kolejki, więc wiadomość nie jest częściowo przyjmowana.
