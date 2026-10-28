@@ -235,3 +235,15 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 - Per-service info i globalne diagnostyki raportują stan tokenów i liczbę odrzuceń. Test QEMU sprawdza walidację, burst, refill, kolejność oraz liczniki.
 
 **Ograniczenia:** limiter działa per odbiorca, współdzielony przez wszystkie źródła; czas opiera się na tickach PIT. Kernel pozostaje single-core Ring 0, bez SMP safety i trwałości liczników po restarcie.
+
+
+## HYBRID OS v0.20.0 — IPC Fair Scheduling, Per-Source Quotas & Priority-Aware Admission
+
+**Status: CI pending.** Wymagany marker QEMU: `HYBRID: IPC_FAIR_ADMISSION_SELFTEST_OK`.
+
+- Odbiór z kolejki usługi wybiera źródła round-robin po identyfikatorze źródła, zachowując FIFO w obrębie źródła. Kanały ogólne z `source_service_id == 0` zachowują FIFO.
+- `scheduler_ipc_service_set_source_quota(destination, limit)` ogranicza liczbę wiadomości jednego źródła oczekujących u odbiorcy. `0` wyłącza limit; limit maksymalny to pojemność kolejki.
+- `scheduler_ipc_service_set_priority_admission(destination, true)` pozwala przy pełnej kolejce przyjąć wiadomość wyłącznie wtedy, gdy jej źródło ma wyższy priorytet niż najniższy priorytet już zakolejkowanej wiadomości; wtedy najstarsza wiadomość o najniższym priorytecie zostaje wywłaszczona.
+- Diagnostyka rejestruje odmowy quota, preempcje priorytetowe i selekcje round-robin. Domyślnie quota i priority admission są wyłączone, by zachować kompatybilność.
+
+**Ograniczenia:** sprawiedliwość dotyczy kolejności odbioru per źródło, nie planowania CPU; kolejka ma stałą pojemność 4; priorytety to wartości usług, a nie klasy czasu rzeczywistego. Kernel pozostaje jednordzeniowy Ring 0.
