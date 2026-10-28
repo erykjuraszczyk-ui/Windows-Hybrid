@@ -2505,7 +2505,8 @@ bool scheduler_ipc_trace_self_test(void) {
     if(count==0U||count>SCHEDULER_IPC_TRACE_CAPACITY) return false;
     bool sent=false,received=false,acked=false; uint64_t previous=0U;
     for(uint32_t i=0;i<count;++i){scheduler_ipc_trace_event_t e={0};
-        if(!scheduler_ipc_trace_read(i,&e)||e.sequence<=previous||e.tick==0U)return false; previous=e.sequence;
+        if (!scheduler_ipc_trace_read(i, &e) || e.sequence <= previous || e.tick == 0U) return false;
+        previous = e.sequence;
         if(e.delivery_id!=id)continue;
         if(e.kind==SCHEDULER_IPC_TRACE_SEND&&e.source_service_id==src&&e.destination_service_id==dst)sent=true;
         if(e.kind==SCHEDULER_IPC_TRACE_RECEIVE&&e.destination_service_id==dst)received=true;
@@ -2824,11 +2825,23 @@ uint32_t scheduler_ipc_pending_call_count(void) {
     return count;
 }
 
-uint32_t scheduler_ipc_trace_count(void) { const uint64_t flags=scheduler_irq_save_disable(); const uint32_t count=ipc_trace_count; scheduler_irq_restore(flags); return count; }
+uint32_t scheduler_ipc_trace_count(void) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    const uint32_t count = ipc_trace_count;
+    scheduler_irq_restore(flags);
+    return count;
+}
+
 bool scheduler_ipc_trace_read(uint32_t offset, scheduler_ipc_trace_event_t *event) {
-    if(event==NULL) return false; const uint64_t flags=scheduler_irq_save_disable();
-    if(offset>=ipc_trace_count){scheduler_irq_restore(flags);return false;}
-    *event=ipc_trace_events[(ipc_trace_head+offset)%SCHEDULER_IPC_TRACE_CAPACITY]; scheduler_irq_restore(flags); return true;
+    if (event == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (offset >= ipc_trace_count) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    *event = ipc_trace_events[(ipc_trace_head + offset) % SCHEDULER_IPC_TRACE_CAPACITY];
+    scheduler_irq_restore(flags);
+    return true;
 }
 
 void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
