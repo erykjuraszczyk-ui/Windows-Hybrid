@@ -31,7 +31,7 @@
 | v0.15.0 | Retry sterowane tickami PIT, terminy dostaw i ograniczona dead-letter queue; CI PASS po scaleniu |
 | v0.16.0 | Wykładniczy backoff z limitem, circuit breakers CLOSED/OPEN/HALF_OPEN, zdrowie usług i test odzyskiwania; CI PASS po scaleniu ([przebieg](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40522608835)) |
 | v0.17.0 | Adaptacyjne równoważenie IPC po głębokości kolejki i priorytecie, progi przeciążenia high/low watermark oraz test QEMU; CI PASS po scaleniu |
-| v0.18.0 | Token-bucket rate limiting per usługa, burst/refill w tickach PIT, admission control i diagnostyka; CI pending |
+| v0.18.0 | Token-bucket rate limiting per usługa, burst/refill w tickach PIT, admission control i diagnostyka; CI PASS na gałęzi funkcji ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40666400100)) |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
