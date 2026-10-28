@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.17.0 — IPC Adaptive Load Balancing, Service Priorities & Congestion Control; implementacja na gałęzi funkcji, CI pending.
+**Aktualny etap:** v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics; implementacja na gałęzi funkcji, CI pending.
 
 ## Historia statusu
 
@@ -144,3 +144,8 @@ See [HYBRID OS v0.11.0 guide](docs/BOOTSTRAP_v0.11.0.md). Do not mark PASS until
 - QEMU test weryfikuje pełną kolejkę dla wszystkich polityk oraz dokładną sekwencję odebranych identyfikatorów wiadomości.
 
 Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie jej obsłużenia przez odbiorcę ani trwałego zapisu. Szczegóły: [przewodnik v0.13.0](docs/BOOTSTRAP_v0.13.0.md).
+
+
+## HYBRID OS v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics
+
+**Status: CI pending.** Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
