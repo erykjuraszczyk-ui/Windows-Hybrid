@@ -74,7 +74,9 @@ typedef enum {
     SCHEDULER_IPC_DELIVERY_ACKNOWLEDGED = 12U,
     SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED = 13U,
     SCHEDULER_IPC_DELIVERY_CIRCUIT_OPEN = 14U,
-    SCHEDULER_IPC_DELIVERY_RATE_LIMITED = 15U
+    SCHEDULER_IPC_DELIVERY_RATE_LIMITED = 15U,
+    SCHEDULER_IPC_DELIVERY_SOURCE_QUOTA = 16U,
+    SCHEDULER_IPC_DELIVERY_PRIORITY_PREEMPTED = 17U
 } scheduler_ipc_delivery_result_t;
 typedef enum {
     SCHEDULER_IPC_DELIVERY_STATE_FREE = 0U,
@@ -137,6 +139,10 @@ typedef struct {
     uint64_t messages_dropped_oldest;
     uint64_t messages_rejected_full;
     bool rate_limit_enabled;
+    uint32_t max_messages_per_source;
+    bool priority_admission_enabled;
+    uint64_t source_quota_rejections;
+    uint64_t priority_preemptions;
     uint32_t rate_limit_tokens;
     uint32_t rate_limit_capacity;
     uint64_t rate_limited_messages;
@@ -193,6 +199,9 @@ typedef struct {
     uint64_t circuit_open_rejections;
     uint64_t trace_events_recorded, trace_events_overwritten;
     uint64_t rate_limited_messages;
+    uint64_t source_quota_rejections;
+    uint64_t priority_preemptions;
+    uint64_t fair_receive_selections;
     uint32_t trace_events_pending;
     uint32_t dead_letters_pending;
     uint32_t pending_deliveries;
@@ -207,6 +216,7 @@ typedef struct {
     uint32_t count;
     scheduler_wait_queue_t readers;
     scheduler_wait_queue_t writers;
+    scheduler_ipc_service_id_t last_served_source_service_id;
 } scheduler_ipc_channel_t;
 typedef struct {
     volatile uint32_t count;
@@ -267,6 +277,11 @@ bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
                                           uint32_t burst_capacity,
                                           uint32_t refill_tokens,
                                           uint64_t refill_interval_ticks);
+bool scheduler_ipc_service_set_source_quota(scheduler_ipc_service_id_t service_id,
+                                            uint32_t max_messages_per_source);
+bool scheduler_ipc_service_set_priority_admission(scheduler_ipc_service_id_t service_id,
+                                                   bool enabled);
+bool scheduler_ipc_fair_admission_self_test(void);
 bool scheduler_ipc_rate_limit_self_test(void);
 bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
                                                     uint32_t high_watermark,
