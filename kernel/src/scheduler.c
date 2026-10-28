@@ -753,6 +753,9 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
     channel->writers.waiters = 0U;
     channel->last_served_source_service_id = 0U;
     channel->starvation_threshold_ticks = 0U;
+    channel->deadline_aware_selections = 0U;
+    channel->starvation_preventions = 0U;
+    channel->qos_profile_selections = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
         channel->messages[i].type = 0U;
         channel->messages[i].length = 0U;
