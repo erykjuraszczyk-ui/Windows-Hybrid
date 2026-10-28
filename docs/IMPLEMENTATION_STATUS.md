@@ -251,7 +251,7 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 
 ## HYBRID OS v0.21.0 — IPC Deadline-Aware Scheduling, Starvation Prevention & QoS Profiles
 
-**Status: walidacja CI w toku.** PASS dopiero po potwierdzeniu kompilacji ISO i markera `IPC_DEADLINE_QOS_SELFTEST_OK`.
+**Status: CI PASS po scaleniu.** Przebieg [GitHub Actions #40687229337](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40687229337) potwierdził kompilację ISO, `IPC_DEADLINE_QOS_SELFTEST_OK`, `BOOT_OK` i końcowy marker `PASS`.
 
 - Wiadomość IPC przechowuje tick enqueue, deadline i profil QoS; metadane są kopiowane przy przesuwaniu wiadomości w buforze.
 - `scheduler_ipc_service_set_qos_profile(service, profile, default_deadline_budget_ticks, starvation_threshold_ticks)` konfiguruje profil nadawcy, domyślny budżet deadline’u i próg starzenia kolejki odbiorcy. Profil `DEADLINE_CRITICAL` wymaga niezerowego budżetu deadline’u.
