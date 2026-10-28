@@ -2800,40 +2800,40 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 bool scheduler_ipc_deadline_qos_self_test(void) {
-    if (scheduler_ipc_service_count() != 0U) return false;
+    if (scheduler_ipc_service_count() != 0U) serial_write("HYBRID: QOS_FAIL_1\\n"); return false;
     scheduler_ipc_service_id_t best_effort=0U, deadline=0U, destination=0U;
     const uint32_t caps=SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
     if (!scheduler_ipc_service_register_ex("qos.best",caps,&best_effort) ||
         !scheduler_ipc_service_register_ex("qos.deadline",caps,&deadline) ||
-        !scheduler_ipc_service_register_ex("qos.dst",caps,&destination)) return false;
+        !scheduler_ipc_service_register_ex("qos.dst",caps,&destination)) serial_write("HYBRID: QOS_FAIL_2\\n"); return false;
     if (!scheduler_ipc_service_set_qos_profile(best_effort,SCHEDULER_IPC_QOS_BEST_EFFORT,0U,0U) ||
         !scheduler_ipc_service_set_qos_profile(deadline,SCHEDULER_IPC_QOS_DEADLINE_CRITICAL,40U,0U) ||
         !scheduler_ipc_service_set_qos_profile(destination,SCHEDULER_IPC_QOS_NORMAL,0U,20U) ||
-        scheduler_ipc_service_set_qos_profile(deadline,SCHEDULER_IPC_QOS_DEADLINE_CRITICAL,0U,0U)) return false;
+        scheduler_ipc_service_set_qos_profile(deadline,SCHEDULER_IPC_QOS_DEADLINE_CRITICAL,0U,0U)) serial_write("HYBRID: QOS_FAIL_3\\n"); return false;
     scheduler_ipc_diagnostics_t before={0},after={0}; scheduler_ipc_get_diagnostics(&before);
     scheduler_ipc_message_t message={0},received={0};
     message.type=UINT32_C(0x514F5331); message.length=1U; message.payload[0]=UINT8_C(0x5A);
-    if (scheduler_ipc_service_send_ex(best_effort,destination,101U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (scheduler_ipc_service_send_ex(best_effort,destination,101U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) serial_write("HYBRID: QOS_FAIL_4\\n"); return false;
     message.deadline_tick=interrupts_ticks()+100U;
-    if (scheduler_ipc_service_send_ex(deadline,destination,201U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (scheduler_ipc_service_send_ex(deadline,destination,201U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) serial_write("HYBRID: QOS_FAIL_5\\n"); return false;
     if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=201U||
-        received.qos_profile!=SCHEDULER_IPC_QOS_DEADLINE_CRITICAL||received.deadline_tick==0U) return false;
+        received.qos_profile!=SCHEDULER_IPC_QOS_DEADLINE_CRITICAL||received.deadline_tick==0U) serial_write("HYBRID: QOS_FAIL_6\\n"); return false;
     if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=101U||
-        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) return false;
+        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) serial_write("HYBRID: QOS_FAIL_7\\n"); return false;
     message.deadline_tick=0U;
-    if (scheduler_ipc_service_send_ex(best_effort,destination,102U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (scheduler_ipc_service_send_ex(best_effort,destination,102U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) serial_write("HYBRID: QOS_FAIL_8\\n"); return false;
     const uint64_t target=interrupts_ticks()+25U; interrupts_enable();
-    const bool waited=interrupts_wait_for_ticks(target); interrupts_disable(); if(!waited)return false;
+    const bool waited=interrupts_wait_for_ticks(target); interrupts_disable(); if(!waited)serial_write("HYBRID: QOS_FAIL_9\\n"); return false;
     message.deadline_tick=interrupts_ticks()+1U;
-    if (scheduler_ipc_service_send_ex(deadline,destination,202U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (scheduler_ipc_service_send_ex(deadline,destination,202U,&message)!=SCHEDULER_IPC_DELIVERY_DELIVERED) serial_write("HYBRID: QOS_FAIL_10\\n"); return false;
     if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=102U||
-        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) return false;
-    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=202U) return false;
+        received.qos_profile!=SCHEDULER_IPC_QOS_BEST_EFFORT) serial_write("HYBRID: QOS_FAIL_11\\n"); return false;
+    if (!scheduler_ipc_service_receive(destination,&received)||received.request_id!=202U) serial_write("HYBRID: QOS_FAIL_12\\n"); return false;
     scheduler_ipc_service_info_t info={0};
     if (!scheduler_ipc_service_get_info(destination,&info)||info.starvation_threshold_ticks!=20U||
         info.starvation_preventions==0U||info.deadline_aware_selections==0U||
         !scheduler_ipc_service_get_info(deadline,&info)||info.qos_profile!=SCHEDULER_IPC_QOS_DEADLINE_CRITICAL||
-        info.default_deadline_budget_ticks!=40U) return false;
+        info.default_deadline_budget_ticks!=40U) serial_write("HYBRID: QOS_FAIL_13\\n"); return false;
     scheduler_ipc_get_diagnostics(&after);
     const bool diag=after.deadline_aware_selections>before.deadline_aware_selections&&
         after.starvation_preventions>before.starvation_preventions&&
