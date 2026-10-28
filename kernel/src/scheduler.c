@@ -1826,7 +1826,6 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     }
 
     scheduler_ipc_channel_t *channel = &destination->channel;
-    scheduler_ipc_channel_t *channel = &destination->channel;
     if (destination->max_messages_per_source != 0U) {
         uint32_t queued_from_source = 0U;
         for (uint32_t offset = 0U; offset < channel->count; ++offset) {
