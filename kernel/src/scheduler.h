@@ -53,6 +53,12 @@ typedef enum {
     SCHEDULER_IPC_STATUS_INTERNAL = 5U
 } scheduler_ipc_status_t;
 typedef enum {
+    SCHEDULER_IPC_QOS_BEST_EFFORT = 1U,
+    SCHEDULER_IPC_QOS_NORMAL = 2U,
+    SCHEDULER_IPC_QOS_LATENCY_SENSITIVE = 3U,
+    SCHEDULER_IPC_QOS_DEADLINE_CRITICAL = 4U
+} scheduler_ipc_qos_profile_t;
+typedef enum {
     SCHEDULER_IPC_QUEUE_BLOCK = 0U,
     SCHEDULER_IPC_QUEUE_REJECT = 1U,
     SCHEDULER_IPC_QUEUE_DROP_NEWEST = 2U,
@@ -146,6 +152,12 @@ typedef struct {
     uint32_t rate_limit_tokens;
     uint32_t rate_limit_capacity;
     uint64_t rate_limited_messages;
+    scheduler_ipc_qos_profile_t qos_profile;
+    uint64_t default_deadline_budget_ticks;
+    uint64_t starvation_threshold_ticks;
+    uint64_t deadline_aware_selections;
+    uint64_t starvation_preventions;
+    uint64_t qos_profile_selections;
     char name[SCHEDULER_IPC_SERVICE_NAME_SIZE];
 } scheduler_ipc_service_info_t;
 typedef struct {
@@ -157,6 +169,9 @@ typedef struct {
     scheduler_ipc_service_id_t source_service_id;
     uint32_t request_id;
     uint32_t delivery_id;
+    uint64_t enqueue_tick;
+    uint64_t deadline_tick;
+    scheduler_ipc_qos_profile_t qos_profile;
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
 typedef struct {
@@ -202,6 +217,9 @@ typedef struct {
     uint64_t source_quota_rejections;
     uint64_t priority_preemptions;
     uint64_t fair_receive_selections;
+    uint64_t deadline_aware_selections;
+    uint64_t starvation_preventions;
+    uint64_t qos_profile_selections;
     uint32_t trace_events_pending;
     uint32_t dead_letters_pending;
     uint32_t pending_deliveries;
@@ -217,6 +235,10 @@ typedef struct {
     scheduler_wait_queue_t readers;
     scheduler_wait_queue_t writers;
     scheduler_ipc_service_id_t last_served_source_service_id;
+    uint64_t starvation_threshold_ticks;
+    uint64_t deadline_aware_selections;
+    uint64_t starvation_preventions;
+    uint64_t qos_profile_selections;
 } scheduler_ipc_channel_t;
 typedef struct {
     volatile uint32_t count;
@@ -273,6 +295,11 @@ bool scheduler_ipc_service_get_info(scheduler_ipc_service_id_t service_id,
 bool scheduler_ipc_service_set_queue_policy(scheduler_ipc_service_id_t service_id,
                                              scheduler_ipc_queue_policy_t policy);
 bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority);
+bool scheduler_ipc_service_set_qos_profile(scheduler_ipc_service_id_t service_id,
+                                           scheduler_ipc_qos_profile_t profile,
+                                           uint64_t default_deadline_budget_ticks,
+                                           uint64_t starvation_threshold_ticks);
+bool scheduler_ipc_deadline_qos_self_test(void);
 bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
                                           uint32_t burst_capacity,
                                           uint32_t refill_tokens,
