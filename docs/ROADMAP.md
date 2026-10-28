@@ -65,3 +65,6 @@
 ## Reguła wydania
 
 Kolejny numer nie zamyka poprzedniego etapu automatycznie. Funkcja jest gotowa dopiero po implementacji, kompilacji i zaliczeniu właściwych testów.
+
+
+| v0.18.0 | Ograniczony event trace IPC, telemetria diagnostyczna, korelacja zdarzeń i regresja QEMU; CI pending |
