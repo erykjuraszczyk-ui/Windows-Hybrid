@@ -269,3 +269,12 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 The first CI attempt exposed two compile-time issues in the new pruning path: declaration order for the expiration diagnostic and use of a non-existent wake-all helper. Both were corrected by moving the diagnostic declaration before its first use and waking one blocked writer after reclaiming queue capacity. A follow-up CI run must confirm compilation, QEMU self-tests, and `BOOT_OK`.
 
 **Limitations:** expiry uses monotonic PIT ticks, not wall-clock time. The queue remains bounded and in-memory; no persistence or SMP guarantees are added. TTL expiration is best-effort at receive/retry boundaries, not a background timer interrupt service.
+
+
+## HYBRID OS v0.23.0 — IPC Queue Compaction, Capacity Telemetry & Backpressure Recovery
+
+**Status: implementation committed on feature branch; CI validation pending.** Dodano liczniki kompaktowania i przesunięć wiadomości, migawkę wolnych slotów i procent wykorzystania kolejki, a także licznik przejść ze stanu przeciążenia do odzyskania. Histereza pozostaje oparta o dwa progi: high_watermark aktywuje backpressure, low_watermark zwalnia go dopiero po opróżnieniu kolejki do bezpiecznego poziomu.
+
+Test QEMU sprawdza wykorzystanie 75%, 50% i 25%, liczbę wolnych slotów, odrzucenie wysyłki przy przeciążeniu oraz pojedyncze zarejestrowanie odzyskania. Status PASS dopiero po CI z markerami IPC_QUEUE_TELEMETRY_SELFTEST_OK i BOOT_OK.
+
+**Ograniczenia:** kolejka pozostaje stała (4 wpisy), dane telemetryczne są ulotne, a synchronizacja nadal zakłada single-core Ring 0. Nie ma SMP ani trwałego magazynu metryk.
