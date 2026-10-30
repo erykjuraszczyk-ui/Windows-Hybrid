@@ -177,7 +177,7 @@ Ograniczenia: jednordzeniowy Ring 0; sekcje krytyczne nie są blokadami SMP. Poj
 
 ## HYBRID OS v0.15.0 — IPC Timer-Driven Retry, Delivery Deadlines & Dead-Letter Queue
 
-**Status: CI validation pending.** Nie oznaczaj wersji jako PASS, dopóki najnowszy przebieg GitHub Actions nie potwierdzi kompilacji ISO oraz markera QEMU.
+**Status: CI PASS — potwierdzone w aktualnym `main`.** Pierwotny przebieg v0.15.0 [GitHub Actions #40518327037](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40518327037) zakończył się sukcesem. Ponowna regresja całego stosu w [CI v0.21.0 #40687526955](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40687526955) również potwierdziła marker `IPC_TIMER_RETRY_DEAD_LETTER_SELFTEST_OK` oraz `BOOT_OK`.
 
 - `scheduler_ipc_service_send_reliable_timed()` pozwala podać interwał ponowień i deadline w tickach PIT; poprzednie `scheduler_ipc_service_send_reliable()` zachowuje kompatybilność i pozostaje ręcznie sterowane.
 - Ścieżka `scheduler_on_timer_interrupt()` obsługuje terminy także wtedy, gdy scheduler preempcji nie jest aktywny. Każdy tick skanuje ograniczoną tabelę dostaw; nie jest wymagana dynamiczna alokacja pamięci.
