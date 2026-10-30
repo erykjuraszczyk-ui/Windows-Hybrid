@@ -391,6 +391,10 @@ void kmain(void) {
         serial_write("HYBRID: FAIL_IPC_ADAPTIVE_ADMISSION\n"); cpu_halt();
     }
     serial_write("HYBRID: IPC_ADAPTIVE_ADMISSION_SELFTEST_OK\n");
+    if (!scheduler_ipc_predictive_pressure_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_PREDICTIVE_PRESSURE\\n"); cpu_halt();
+    }
+    serial_write("HYBRID: IPC_PREDICTIVE_PRESSURE_SELFTEST_OK\\n");
     if (!scheduler_ipc_queue_telemetry_self_test()) {
         serial_write("HYBRID: FAIL_IPC_QUEUE_TELEMETRY\n"); cpu_halt();
     }
