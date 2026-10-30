@@ -14,6 +14,7 @@
 - [HYBRID OS v0.10.0](BOOTSTRAP_v0.10.0.md) — protokół request/response i service discovery.
 - [HYBRID OS v0.11.0](BOOTSTRAP_v0.11.0.md) — runtime pending calls, timeouty i demultipleksowanie odpowiedzi.
 - [HYBRID OS v0.23.0](BOOTSTRAP_v0.23.0.md) — telemetryka kolejek IPC, kompaktowanie i odzyskiwanie po backpressure.
+- [HYBRID OS v0.24.0](BOOTSTRAP_v0.24.0.md) — dynamiczne progi admission i adaptacyjne zarządzanie presją kolejki.
 - [HYBRID OS v0.18.0](BOOTSTRAP_v0.18.0.md) — bounded IPC event trace i runtime observability.
 - [HYBRID OS v0.19.0](BOOTSTRAP_v0.19.0.md) — token-bucket rate limiting i admission control.
 - [ROADMAP.md](ROADMAP.md) — wersje oraz zależności pomiędzy etapami.
@@ -51,3 +52,4 @@ Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
 
 | v0.22.0 | IPC Message Expiration, TTL i usuwanie przeterminowanych wiadomości (CI PASS) |
 | v0.23.0 | IPC Queue Compaction, Capacity Telemetry i Backpressure Recovery (CI PASS na gałęzi funkcji) |
+| v0.24.0 | IPC Dynamic Admission Control & Adaptive Queue Pressure Management (implementacja; CI pending) |
