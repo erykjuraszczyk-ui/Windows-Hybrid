@@ -3093,6 +3093,59 @@ bool scheduler_ipc_service_set_predictive_admission(
     return true;
 }
 
+bool scheduler_ipc_predictive_pressure_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("predict.src", caps, &source) ||
+        !scheduler_ipc_service_register_ex("predict.dst", caps, &destination)) return false;
+    if (!scheduler_ipc_service_set_predictive_admission(destination, 1U, 4U)) return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x50524544);
+    message.length = 1U;
+    for (uint32_t i = 1U; i <= 4U; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source, destination, i, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(destination, &info) ||
+        !info.predictive_admission_enabled ||
+        info.predictive_sample_count != SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW ||
+        info.predictive_trend != SCHEDULER_IPC_PRESSURE_RISING ||
+        info.predictive_rising_predictions == 0U ||
+        info.predictive_current_budget >= info.predictive_max_budget) return false;
+
+    if (scheduler_ipc_service_send_ex(source, destination, 5U, &message) !=
+        SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+
+    scheduler_ipc_message_t received = {0};
+    for (uint32_t i = 1U; i <= 3U; ++i) {
+        if (!scheduler_ipc_service_receive(destination, &received) ||
+            received.request_id != i) return false;
+    }
+    if (!scheduler_ipc_service_get_info(destination, &info) ||
+        info.predictive_trend != SCHEDULER_IPC_PRESSURE_FALLING ||
+        info.predictive_falling_predictions == 0U ||
+        info.predictive_current_budget != info.predictive_max_budget ||
+        info.predictive_budget_rejections == 0U ||
+        info.predictive_budget_adjustments == 0U) return false;
+
+    scheduler_ipc_diagnostics_t diag = {0};
+    scheduler_ipc_get_diagnostics(&diag);
+    const bool counters = diag.predictive_samples >= 7U &&
+        diag.predictive_rising_predictions > 0U &&
+        diag.predictive_falling_predictions > 0U &&
+        diag.predictive_budget_adjustments > 0U &&
+        diag.predictive_budget_rejections > 0U;
+    const bool cleanup = scheduler_ipc_service_unregister(destination) &&
+        scheduler_ipc_service_unregister(source) &&
+        scheduler_ipc_service_count() == 0U;
+    return counters && cleanup;
+}
+
 bool scheduler_ipc_adaptive_admission_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, destination = 0U;
