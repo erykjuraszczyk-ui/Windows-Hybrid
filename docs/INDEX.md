@@ -17,6 +17,7 @@
 - [HYBRID OS v0.24.0](BOOTSTRAP_v0.24.0.md) — dynamiczne progi admission i adaptacyjne zarządzanie presją kolejki.
 - [HYBRID OS v0.25.0](BOOTSTRAP_v0.25.0.md) — predykcja trendu presji kolejki i ograniczone budżety admission.
 - [HYBRID OS v0.26.0](BOOTSTRAP_v0.26.0.md) — arbitraż QoS, priorytetów i predykcyjnego przeciążenia.
+- [HYBRID OS v0.27.0](BOOTSTRAP_v0.27.0.md) — DRR, kredyty admission i ochrona przed zagłodzeniem.
 - [HYBRID OS v0.18.0](BOOTSTRAP_v0.18.0.md) — bounded IPC event trace i runtime observability.
 - [HYBRID OS v0.19.0](BOOTSTRAP_v0.19.0.md) — token-bucket rate limiting i admission control.
 - [ROADMAP.md](ROADMAP.md) — wersje oraz zależności pomiędzy etapami.
@@ -54,4 +55,5 @@ Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
 
 | v0.22.0 | IPC Message Expiration, TTL i usuwanie przeterminowanych wiadomości (CI PASS) |
 | v0.23.0 | IPC Queue Compaction, Capacity Telemetry i Backpressure Recovery (CI PASS na gałęzi funkcji) |
-| v0.24.0 | IPC Dynamic Admission Control & Adaptive Queue Pressure Management (implementacja; CI pending) |\n| v0.25.0 | IPC Predictive Queue Pressure & Admission Budgeting (CI PASS na gałęzi funkcji) |\n| v0.26.0 | IPC Congestion-Aware Scheduling & QoS Arbitration (implementacja; CI pending) |
+| v0.24.0 | IPC Dynamic Admission Control & Adaptive Queue Pressure Management (implementacja; CI pending) |\n| v0.25.0 | IPC Predictive Queue Pressure & Admission Budgeting (CI PASS na gałęzi funkcji) |\n| v0.26.0 | IPC Congestion-Aware Scheduling & QoS Arbitration (CI PASS na gałęzi funkcji) |
+| v0.27.0 | IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits (implementacja; CI pending) |
