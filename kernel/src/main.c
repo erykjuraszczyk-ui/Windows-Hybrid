@@ -387,6 +387,10 @@ void kmain(void) {
         serial_write("HYBRID: FAIL_IPC_DEADLINE_QOS\\n"); cpu_halt();
     }
     serial_write("HYBRID: IPC_DEADLINE_QOS_SELFTEST_OK\\n");
+    if (!scheduler_ipc_adaptive_admission_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_ADAPTIVE_ADMISSION\n"); cpu_halt();
+    }
+    serial_write("HYBRID: IPC_ADAPTIVE_ADMISSION_SELFTEST_OK\n");
     if (!scheduler_ipc_queue_telemetry_self_test()) {
         serial_write("HYBRID: FAIL_IPC_QUEUE_TELEMETRY\n"); cpu_halt();
     }
