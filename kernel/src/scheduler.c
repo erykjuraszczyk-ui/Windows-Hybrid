@@ -1485,6 +1485,8 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->adaptive_admission_enabled = service->adaptive_admission_enabled;
     info->adaptive_min_high_watermark = service->adaptive_min_high_watermark;
     info->adaptive_max_high_watermark = service->adaptive_max_high_watermark;
+    info->congestion_high_watermark = service->congestion_high_watermark;
+    info->congestion_low_watermark = service->congestion_low_watermark;
     info->adaptive_admission_adjustments = service->adaptive_admission_adjustments;
     info->adaptive_pressure_events = service->adaptive_pressure_events;
     info->queue_policy = service->queue_policy;
@@ -2973,11 +2975,11 @@ bool scheduler_ipc_adaptive_admission_self_test(void) {
     }
     scheduler_ipc_service_info_t info = {0};
     if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested ||
-        info.queue_high_watermark != 3U || !info.adaptive_admission_enabled) return false;
+        info.congestion_high_watermark != 3U || !info.adaptive_admission_enabled) return false;
     if (scheduler_ipc_service_send_ex(source, destination, 4U, &message) !=
         SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
     if (!scheduler_ipc_service_get_info(destination, &info) ||
-        info.queue_high_watermark != 2U || info.adaptive_min_high_watermark != 1U ||
+        info.congestion_high_watermark != 2U || info.adaptive_min_high_watermark != 1U ||
         info.adaptive_max_high_watermark != 3U || info.adaptive_admission_adjustments != 1U ||
         info.adaptive_pressure_events != 1U || !info.congested) return false;
     scheduler_ipc_message_t received = {0};
