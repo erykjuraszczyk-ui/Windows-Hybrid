@@ -387,6 +387,11 @@ void kmain(void) {
         serial_write("HYBRID: FAIL_IPC_DEADLINE_QOS\\n"); cpu_halt();
     }
     serial_write("HYBRID: IPC_DEADLINE_QOS_SELFTEST_OK\\n");
+    if (!scheduler_ipc_expiration_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_EXPIRATION\\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_EXPIRATION_SELFTEST_OK\\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||

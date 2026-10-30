@@ -155,3 +155,8 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 ## HYBRID OS v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics
 
 **Status: CI pending.** Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
+
+
+## Następny etap — HYBRID OS v0.22.0
+
+**Status: specyfikacja na gałęzi funkcji; implementacja i walidacja QEMU jeszcze nie rozpoczęte.** Zakres: osobny TTL wiadomości IPC, domyślna polityka per usługa, usuwanie przeterminowanych wpisów przed odbiorem, integracja z receipt/DLQ/trace i regresja QEMU. Szczegóły: [specyfikacja v0.22.0](docs/BOOTSTRAP_v0.22.0.md).
