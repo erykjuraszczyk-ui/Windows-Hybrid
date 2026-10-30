@@ -767,6 +767,7 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
         channel->messages[i].delivery_id = 0U;
         channel->messages[i].enqueue_tick = 0U;
         channel->messages[i].deadline_tick = 0U;
+        channel->messages[i].expiry_tick = 0U;
         channel->messages[i].qos_profile = SCHEDULER_IPC_QOS_NORMAL;
         for (uint32_t j = 0U; j < SCHEDULER_IPC_PAYLOAD_SIZE; ++j)
             channel->messages[i].payload[j] = 0U;
@@ -790,6 +791,7 @@ static void scheduler_ipc_message_copy(scheduler_ipc_message_t *destination,
     destination->delivery_id = source->delivery_id;
     destination->enqueue_tick = source->enqueue_tick;
     destination->deadline_tick = source->deadline_tick;
+    destination->expiry_tick = source->expiry_tick;
     destination->qos_profile = source->qos_profile;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_PAYLOAD_SIZE; ++i)
         destination->payload[i] = source->payload[i];
@@ -844,6 +846,30 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
             channel->tail >= SCHEDULER_IPC_CAPACITY) {
             scheduler_irq_restore(flags);
             return false;
+        }
+        if (channel->count > 0U) {
+            /* Prune expired entries before scheduling; compacting preserves FIFO order. */
+            scheduler_ipc_message_t live[SCHEDULER_IPC_CAPACITY];
+            uint32_t live_count = 0U;
+            const uint64_t prune_now = interrupts_ticks();
+            for (uint32_t offset = 0U; offset < channel->count; ++offset) {
+                const uint32_t index = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
+                const scheduler_ipc_message_t *queued = &channel->messages[index];
+                if (queued->expiry_tick != 0U && prune_now >= queued->expiry_tick) {
+                    ++ipc_diag_messages_expired;
+                    continue;
+                }
+                scheduler_ipc_message_copy(&live[live_count++], queued);
+            }
+            if (live_count != channel->count) {
+                for (uint32_t i = 0U; i < live_count; ++i)
+                    scheduler_ipc_message_copy(&channel->messages[i], &live[i]);
+                channel->head = 0U;
+                channel->count = live_count;
+                channel->tail = live_count % SCHEDULER_IPC_CAPACITY;
+                if (channel->writers.waiters != 0U)
+                    (void)wait_queue_wake_all_locked(&channel->writers);
+            }
         }
         if (channel->count > 0U) {
             uint32_t selected_offset = 0U;
@@ -1119,6 +1145,7 @@ typedef struct {
     uint64_t rate_limited_messages;
     scheduler_ipc_qos_profile_t qos_profile;
     uint64_t default_deadline_budget_ticks;
+    uint64_t default_ttl_ticks;
     scheduler_ipc_circuit_state_t circuit_state;
     scheduler_ipc_health_state_t health_state;
     uint32_t breaker_failure_threshold;
@@ -1150,6 +1177,7 @@ static scheduler_ipc_delivery_track_t ipc_delivery_tracks[SCHEDULER_IPC_MAX_TRAC
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
 static uint64_t ipc_diag_messages_enqueued;
 static uint64_t ipc_diag_messages_received;
+static uint64_t ipc_diag_messages_expired;
 static uint64_t ipc_diag_backpressure_events;
 static uint64_t ipc_diag_messages_dropped_newest;
 static uint64_t ipc_diag_messages_dropped_oldest;
@@ -1587,6 +1615,19 @@ bool scheduler_ipc_service_set_qos_profile(scheduler_ipc_service_id_t service_id
     return true;
 }
 
+bool scheduler_ipc_service_set_default_ttl(scheduler_ipc_service_id_t service_id,
+                                                uint64_t ttl_ticks) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->default_ttl_ticks = ttl_ticks;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
 bool scheduler_ipc_service_set_priority(scheduler_ipc_service_id_t service_id, uint32_t priority) {
     if (priority < SCHEDULER_IPC_PRIORITY_MIN || priority > SCHEDULER_IPC_PRIORITY_MAX)
         return false;
@@ -2019,6 +2060,8 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     forwarded.request_id = request_id;
     forwarded.enqueue_tick = now;
     forwarded.qos_profile = source->qos_profile;
+    if (forwarded.expiry_tick == 0U && source->default_ttl_ticks != 0U)
+        forwarded.expiry_tick = scheduler_ipc_tick_add_saturating(now, source->default_ttl_ticks);
     if (forwarded.deadline_tick == 0U && source->default_deadline_budget_ticks != 0U)
         forwarded.deadline_tick = scheduler_ipc_tick_add_saturating(now, source->default_deadline_budget_ticks);
     scheduler_ipc_message_copy(&channel->messages[channel->tail], &forwarded);
@@ -2262,6 +2305,15 @@ scheduler_ipc_delivery_result_t scheduler_ipc_delivery_retry(uint32_t delivery_i
     if (track->receipt.state != SCHEDULER_IPC_DELIVERY_STATE_PENDING) {
         scheduler_irq_restore(flags);
         return track->receipt.last_result;
+    }
+    const uint64_t retry_now = interrupts_ticks();
+    if (track->message.expiry_tick != 0U && retry_now >= track->message.expiry_tick) {
+        track->receipt.state = SCHEDULER_IPC_DELIVERY_STATE_EXPIRED;
+        track->receipt.last_result = SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED;
+        ++ipc_diag_messages_expired;
+        scheduler_ipc_dead_letter_enqueue_locked(track, SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED, retry_now);
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_DEADLINE_EXPIRED;
     }
     scheduler_ipc_service_t *gate_destination =
         scheduler_ipc_find_service_locked(track->receipt.destination_service_id);
@@ -2801,6 +2853,31 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 
+
+bool scheduler_ipc_expiration_self_test(void) {
+    scheduler_ipc_channel_t channel;
+    scheduler_ipc_message_t message = {0}, received = {0};
+    scheduler_ipc_channel_init(&channel);
+    message.type = UINT32_C(0x45585031);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0xA1);
+    message.request_id = 1U;
+    message.expiry_tick = 1U;
+    if (!scheduler_ipc_send(&channel, &message)) return false;
+    message.request_id = 2U;
+    message.expiry_tick = 0U;
+    if (!scheduler_ipc_send(&channel, &message)) return false;
+    const uint64_t before = ipc_diag_messages_expired;
+    if (!scheduler_ipc_receive(&channel, &received) || received.request_id != 2U ||
+        received.expiry_tick != 0U || channel.count != 0U ||
+        ipc_diag_messages_expired != before + 1U) return false;
+    message.request_id = 3U;
+    message.expiry_tick = 1U;
+    if (!scheduler_ipc_send(&channel, &message)) return false;
+    return !scheduler_ipc_receive(&channel, &received) && channel.count == 0U &&
+           ipc_diag_messages_expired == before + 2U;
+}
+
 bool scheduler_ipc_deadline_qos_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t best_effort=0U, deadline=0U, destination=0U;
@@ -3339,6 +3416,7 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->duplicate_deliveries_suppressed = ipc_diag_duplicate_deliveries_suppressed;
     diagnostics->automatic_retry_attempts = ipc_diag_automatic_retry_attempts;
     diagnostics->delivery_deadlines_expired = ipc_diag_delivery_deadlines_expired;
+    diagnostics->messages_expired = ipc_diag_messages_expired;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
