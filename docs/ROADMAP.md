@@ -72,3 +72,5 @@ Kolejny numer nie zamyka poprzedniego etapu automatycznie. Funkcja jest gotowa d
 
 | v0.20.0 | Fair scheduling źródeł przy odbiorze, limity per-source, preempcja wiadomości o niższym priorytecie i diagnostyka; CI PASS po scaleniu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40680724904)) |
 | v0.21.0 | Deadline-aware scheduling, starvation prevention przez aging, profile QoS i diagnostyka; CI PASS po scaleniu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40687229337)) |
+
+| v0.22.0 | IPC Message Expiration, per-message TTL, stale-queue pruning, integracja receipt/DLQ i diagnostyka; specyfikacja na gałęzi funkcji, implementacja pending |
