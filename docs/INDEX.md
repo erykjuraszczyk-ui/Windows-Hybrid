@@ -47,3 +47,5 @@
 | v2.0.0–v3.0.0 | Stabilizacja ABI, SDK, sandbox, pakiety, CI, Verified Boot |
 
 Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
+
+| v0.22.0 | IPC Message Expiration, TTL i usuwanie przeterminowanych wiadomości (specyfikacja) |
