@@ -1,9 +1,11 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.21.0 — IPC Deadline-Aware Scheduling, Starvation Prevention & QoS Profiles; CI PASS po scaleniu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40687229337)).
+**Aktualny etap:** v0.27.0 — IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits; walidacja CI w toku.
 
 ## Historia statusu
+
+- **v0.27.0 — walidacja w toku:** bounded IPC Deficit Round Robin, QoS-weighted credits, starvation aging i telemetria.
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, IDT, wyjątek i PIT.
@@ -75,6 +77,7 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 - [HYBRID OS v0.16.0 — Retry Backoff, Circuit Breakers & Service Health](docs/BOOTSTRAP_v0.16.0.md)
 - [HYBRID OS v0.18.0 — IPC Event Trace & Runtime Observability](docs/BOOTSTRAP_v0.18.0.md)
 - [HYBRID OS v0.19.0 — Token-Bucket Rate Limiting & Admission Control](docs/BOOTSTRAP_v0.19.0.md)
+- [HYBRID OS v0.27.0 — IPC Deficit Round Robin & Fair Admission Credits](docs/BOOTSTRAP_v0.27.0.md)
 
 
 ## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
