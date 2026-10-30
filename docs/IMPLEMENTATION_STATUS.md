@@ -260,3 +260,12 @@ Trace jest ulotny i nadpisuje najstarsze wpisy po przepełnieniu. Synchronizacja
 - Diagnostyka liczy wybory deadline-aware, zapobieżenia starvation i wybory QoS. Test QEMU weryfikuje pierwszeństwo deadline’u oraz obsługę starej wiadomości best-effort przed nowszą wiadomością krytyczną.
 
 **Ograniczenia:** ticki PIT nie są zegarem czasu rzeczywistego; QoS nie gwarantuje twardych deadline’ów. Kolejka ma pojemność 4, synchronizacja pozostaje jednordzeniowa.
+
+
+## HYBRID OS v0.22.0 — IPC Message Expiration, Stale-Queue Pruning & TTL Policy
+
+**Status: implementation committed; CI validation pending.** The feature branch adds an absolute `expiry_tick` to IPC messages, optional per-source default TTL, bounded queue pruning before receive selection, and a counter for expired messages. Expired queue entries are discarded before delivery; remaining messages retain their relative order. Reliable delivery retries check message expiry and transition the receipt to the existing terminal expired state with a dead-letter record.
+
+The first CI attempt exposed two compile-time issues in the new pruning path: declaration order for the expiration diagnostic and use of a non-existent wake-all helper. Both were corrected by moving the diagnostic declaration before its first use and waking one blocked writer after reclaiming queue capacity. A follow-up CI run must confirm compilation, QEMU self-tests, and `BOOT_OK`.
+
+**Limitations:** expiry uses monotonic PIT ticks, not wall-clock time. The queue remains bounded and in-memory; no persistence or SMP guarantees are added. TTL expiration is best-effort at receive/retry boundaries, not a background timer interrupt service.
