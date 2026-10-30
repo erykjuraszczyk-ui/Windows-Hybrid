@@ -50,4 +50,4 @@
 Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
 
 | v0.22.0 | IPC Message Expiration, TTL i usuwanie przeterminowanych wiadomości (CI PASS) |
-| v0.23.0 | IPC Queue Compaction, Capacity Telemetry i Backpressure Recovery (implementacja; CI pending) |
+| v0.23.0 | IPC Queue Compaction, Capacity Telemetry i Backpressure Recovery (CI PASS na gałęzi funkcji) |
