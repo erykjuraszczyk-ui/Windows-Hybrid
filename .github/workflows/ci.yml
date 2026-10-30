@@ -1,4 +1,4 @@
-name: hybrid-os-v0.23.0
+name: hybrid-os-v0.24.0
 on:
   push:
     branches: [main, "feat/**"]
@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   boot-smoke-test:
-    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol, pending-call runtime, concurrent replies, service lifecycle, queue backpressure, delivery receipts, ACK, exponential retry backoff, circuit breakers, service health, deadlines, dead-letter queue, bounded IPC event tracing, token-bucket rate limiting, fair per-source scheduling, per-source quotas, priority-aware admission, deadline-aware scheduling, starvation prevention, QoS profiles, message TTL expiration, stale-queue pruning, queue compaction telemetry, capacity metrics and backpressure recovery in QEMU
+    name: Build and test Memory Core, GDT/TSS/IST, task lifecycle, blocking/wakeup, timers, timeouts, semaphores, IPC services, request/response protocol, pending-call runtime, concurrent replies, service lifecycle, queue backpressure, delivery receipts, ACK, exponential retry backoff, circuit breakers, service health, deadlines, dead-letter queue, bounded IPC event tracing, token-bucket rate limiting, fair per-source scheduling, per-source quotas, priority-aware admission, deadline-aware scheduling, starvation prevention, QoS profiles, message TTL expiration, stale-queue pruning, queue compaction telemetry, capacity metrics, adaptive admission control and backpressure recovery in QEMU
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -25,7 +25,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v5
         with:
-          name: hybrid-os-v0.23.0
+          name: hybrid-os-v0.24.0
           path: |
             build/kernel.elf
             build/hybrid.iso
