@@ -3117,6 +3117,53 @@ bool scheduler_ipc_qos_arbitration_self_test(void) {
     return telemetry && cleanup;
 }
 
+
+bool scheduler_ipc_drr_fair_admission_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t best_effort = 0U, normal = 0U, critical = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("drr.best", caps, &best_effort) ||
+        !scheduler_ipc_service_register_ex("drr.norm", caps, &normal) ||
+        !scheduler_ipc_service_register_ex("drr.crit", caps, &critical)) return false;
+    if (!scheduler_ipc_service_set_qos_profile(best_effort,
+            SCHEDULER_IPC_QOS_BEST_EFFORT, 0U, 0U) ||
+        !scheduler_ipc_service_set_qos_profile(normal,
+            SCHEDULER_IPC_QOS_NORMAL, 0U, 0U) ||
+        !scheduler_ipc_service_set_qos_profile(critical,
+            SCHEDULER_IPC_QOS_DEADLINE_CRITICAL, 8U, 0U)) return false;
+    const scheduler_ipc_service_id_t candidates[3] = {
+        best_effort, normal, critical
+    };
+    uint32_t best_effort_grants = 0U, critical_grants = 0U;
+    for (uint32_t round = 0U; round < 12U; ++round) {
+        scheduler_ipc_service_id_t selected = 0U;
+        if (!scheduler_ipc_service_select_adaptive(candidates, 3U, &selected))
+            return false;
+        if (selected == best_effort) ++best_effort_grants;
+        if (selected == critical) ++critical_grants;
+    }
+    scheduler_ipc_service_info_t best_info = {0}, normal_info = {0}, critical_info = {0};
+    if (!scheduler_ipc_service_get_info(best_effort, &best_info) ||
+        !scheduler_ipc_service_get_info(normal, &normal_info) ||
+        !scheduler_ipc_service_get_info(critical, &critical_info)) return false;
+    scheduler_ipc_diagnostics_t diagnostics = {0};
+    scheduler_ipc_get_diagnostics(&diagnostics);
+    const bool bounded = best_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX &&
+        normal_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX &&
+        critical_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX;
+    const bool fairness = best_effort_grants > 0U && critical_grants > 0U &&
+        best_info.arbitration_starvation_protections > 0U;
+    const bool accounting = diagnostics.drr_credit_earned > 0U &&
+        diagnostics.drr_credit_spent > 0U &&
+        diagnostics.drr_starvation_protections > 0U &&
+        diagnostics.drr_candidate_visits >= 36U;
+    const bool cleanup = scheduler_ipc_service_unregister(critical) &&
+        scheduler_ipc_service_unregister(normal) &&
+        scheduler_ipc_service_unregister(best_effort) &&
+        scheduler_ipc_service_count() == 0U;
+    return bounded && fairness && accounting && cleanup;
+}
+
 bool scheduler_ipc_adaptive_load_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, low = 0U, high = 0U;
@@ -3994,6 +4041,10 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->arbitration_selections = ipc_diag_arbitration_selections;
     diagnostics->arbitration_pressure_skips = ipc_diag_arbitration_pressure_skips;
     diagnostics->arbitration_qos_adjustments = ipc_diag_arbitration_qos_adjustments;
+    diagnostics->drr_credit_earned = ipc_diag_drr_credit_earned;
+    diagnostics->drr_credit_spent = ipc_diag_drr_credit_spent;
+    diagnostics->drr_starvation_protections = ipc_diag_drr_starvation_protections;
+    diagnostics->drr_candidate_visits = ipc_diag_drr_candidate_visits;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
