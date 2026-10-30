@@ -19,6 +19,8 @@ typedef enum {
 } scheduler_wait_result_t;
 #define SCHEDULER_IPC_CAPACITY 4U
 #define SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW 4U
+#define SCHEDULER_IPC_DRR_CREDIT_MAX 32U
+#define SCHEDULER_IPC_DRR_STARVATION_ROUNDS 4U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
@@ -167,6 +169,11 @@ typedef struct {
     uint64_t arbitration_pressure_skips;
     uint64_t arbitration_qos_adjustments;
     uint32_t arbitration_last_score;
+    uint32_t arbitration_deficit_credit;
+    uint32_t arbitration_wait_rounds;
+    uint64_t arbitration_credit_earned;
+    uint64_t arbitration_credit_spent;
+    uint64_t arbitration_starvation_protections;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -253,6 +260,10 @@ typedef struct {
     uint64_t arbitration_selections;
     uint64_t arbitration_pressure_skips;
     uint64_t arbitration_qos_adjustments;
+    uint64_t drr_credit_earned;
+    uint64_t drr_credit_spent;
+    uint64_t drr_starvation_protections;
+    uint64_t drr_candidate_visits;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -375,6 +386,7 @@ bool scheduler_ipc_service_set_predictive_admission(scheduler_ipc_service_id_t s
                                                       uint32_t max_budget);
 bool scheduler_ipc_predictive_pressure_self_test(void);
 bool scheduler_ipc_qos_arbitration_self_test(void);
+bool scheduler_ipc_drr_fair_admission_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
