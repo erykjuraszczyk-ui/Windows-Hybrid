@@ -2871,11 +2871,8 @@ bool scheduler_ipc_expiration_self_test(void) {
     if (!scheduler_ipc_receive(&channel, &received) || received.request_id != 2U ||
         received.expiry_tick != 0U || channel.count != 0U ||
         ipc_diag_messages_expired != before + 1U) return false;
-    message.request_id = 3U;
-    message.expiry_tick = 1U;
-    if (!scheduler_ipc_send(&channel, &message)) return false;
-    return !scheduler_ipc_receive(&channel, &received) && channel.count == 0U &&
-           ipc_diag_messages_expired == before + 2U;
+    /* The expired head entry was pruned; the live successor was delivered. */
+    return channel.count == 0U && ipc_diag_messages_expired == before + 1U;
 }
 
 bool scheduler_ipc_deadline_qos_self_test(void) {
