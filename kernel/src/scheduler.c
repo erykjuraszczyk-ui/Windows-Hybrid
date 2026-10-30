@@ -67,6 +67,9 @@ static uint64_t ipc_diag_predictive_rising_predictions;
 static uint64_t ipc_diag_predictive_falling_predictions;
 static uint64_t ipc_diag_predictive_budget_adjustments;
 static uint64_t ipc_diag_predictive_budget_rejections;
+static uint64_t ipc_diag_arbitration_selections;
+static uint64_t ipc_diag_arbitration_pressure_skips;
+static uint64_t ipc_diag_arbitration_qos_adjustments;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1169,6 +1172,10 @@ typedef struct {
     uint64_t predictive_falling_predictions;
     uint64_t predictive_budget_adjustments;
     uint64_t predictive_budget_rejections;
+    uint64_t arbitration_selections;
+    uint64_t arbitration_pressure_skips;
+    uint64_t arbitration_qos_adjustments;
+    uint32_t arbitration_last_score;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1302,6 +1309,10 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->predictive_falling_predictions = 0U;
     service->predictive_budget_adjustments = 0U;
     service->predictive_budget_rejections = 0U;
+    service->arbitration_selections = 0U;
+    service->arbitration_pressure_skips = 0U;
+    service->arbitration_qos_adjustments = 0U;
+    service->arbitration_last_score = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         service->predictive_samples[sample] = 0U;
     service->messages_enqueued = 0U;
@@ -1448,6 +1459,10 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->predictive_falling_predictions = 0U;
     free_slot->predictive_budget_adjustments = 0U;
     free_slot->predictive_budget_rejections = 0U;
+    free_slot->arbitration_selections = 0U;
+    free_slot->arbitration_pressure_skips = 0U;
+    free_slot->arbitration_qos_adjustments = 0U;
+    free_slot->arbitration_last_score = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         free_slot->predictive_samples[sample] = 0U;
     free_slot->priority = 1U;
@@ -1546,6 +1561,10 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->predictive_falling_predictions = service->predictive_falling_predictions;
     info->predictive_budget_adjustments = service->predictive_budget_adjustments;
     info->predictive_budget_rejections = service->predictive_budget_rejections;
+    info->arbitration_selections = service->arbitration_selections;
+    info->arbitration_pressure_skips = service->arbitration_pressure_skips;
+    info->arbitration_qos_adjustments = service->arbitration_qos_adjustments;
+    info->arbitration_last_score = service->arbitration_last_score;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1809,11 +1828,56 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
     for (uint32_t n = 0U; n < candidate_count; ++n) {
         const uint32_t i = (tie_cursor + n) % candidate_count;
         scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(candidates[i]);
-        if (service == NULL || service->closing || service->congested ||
+        if (service == NULL || service->closing ||
             service->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN ||
             service->channel.count > SCHEDULER_IPC_CAPACITY) continue;
-        const uint64_t score = ((uint64_t)service->channel.count * UINT64_C(1000)) /
-                               (uint64_t)service->priority;
+        if (service->congested ||
+            (service->predictive_admission_enabled &&
+             (service->predictive_current_budget == 0U ||
+              service->channel.count >= service->predictive_current_budget))) {
+            ++service->arbitration_pressure_skips;
+            ++ipc_diag_arbitration_pressure_skips;
+            continue;
+        }
+        uint64_t score = ((uint64_t)service->channel.count * UINT64_C(1000)) /
+                         (uint64_t)service->priority;
+        switch (service->qos_profile) {
+            case SCHEDULER_IPC_QOS_BEST_EFFORT:
+                score = (score * UINT64_C(125)) / UINT64_C(100);
+                ++service->arbitration_qos_adjustments;
+                ++ipc_diag_arbitration_qos_adjustments;
+                break;
+            case SCHEDULER_IPC_QOS_LATENCY_SENSITIVE:
+                score = (score * UINT64_C(85)) / UINT64_C(100);
+                ++service->arbitration_qos_adjustments;
+                ++ipc_diag_arbitration_qos_adjustments;
+                break;
+            case SCHEDULER_IPC_QOS_DEADLINE_CRITICAL:
+                score = (score * UINT64_C(70)) / UINT64_C(100);
+                ++service->arbitration_qos_adjustments;
+                ++ipc_diag_arbitration_qos_adjustments;
+                break;
+            case SCHEDULER_IPC_QOS_NORMAL:
+            default:
+                break;
+        }
+        if (service->predictive_admission_enabled) {
+            if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_RISING) {
+                score += UINT64_C(500);
+            } else if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_FALLING) {
+                score = score > UINT64_C(100) ? score - UINT64_C(100) : 0U;
+            }
+            if (service->predictive_max_budget > 0U &&
+                service->predictive_current_budget < service->predictive_max_budget) {
+                const uint64_t depleted =
+                    (uint64_t)(service->predictive_max_budget -
+                               service->predictive_current_budget);
+                score += (depleted * UINT64_C(200)) /
+                         (uint64_t)service->predictive_max_budget;
+            }
+        }
+        service->arbitration_last_score =
+            score > UINT32_MAX ? UINT32_MAX : (uint32_t)score;
         if (!found || score < best_score) {
             found = true;
             best_score = score;
@@ -1822,6 +1886,11 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
     }
     if (found) {
         *selected_service_id = best_id;
+        scheduler_ipc_service_t *selected = scheduler_ipc_find_service_locked(best_id);
+        if (selected != NULL) {
+            ++selected->arbitration_selections;
+            ++ipc_diag_arbitration_selections;
+        }
         for (uint32_t i = 0U; i < candidate_count; ++i) {
             if (candidates[i] == best_id) {
                 tie_cursor = (i + 1U) % candidate_count;
@@ -3087,6 +3156,10 @@ bool scheduler_ipc_service_set_predictive_admission(
     service->predictive_falling_predictions = 0U;
     service->predictive_budget_adjustments = 0U;
     service->predictive_budget_rejections = 0U;
+    service->arbitration_selections = 0U;
+    service->arbitration_pressure_skips = 0U;
+    service->arbitration_qos_adjustments = 0U;
+    service->arbitration_last_score = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         service->predictive_samples[sample] = 0U;
     scheduler_irq_restore(flags);
@@ -3785,6 +3858,9 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->predictive_falling_predictions = ipc_diag_predictive_falling_predictions;
     diagnostics->predictive_budget_adjustments = ipc_diag_predictive_budget_adjustments;
     diagnostics->predictive_budget_rejections = ipc_diag_predictive_budget_rejections;
+    diagnostics->arbitration_selections = ipc_diag_arbitration_selections;
+    diagnostics->arbitration_pressure_skips = ipc_diag_arbitration_pressure_skips;
+    diagnostics->arbitration_qos_adjustments = ipc_diag_arbitration_qos_adjustments;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
