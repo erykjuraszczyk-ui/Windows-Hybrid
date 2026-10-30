@@ -134,6 +134,11 @@ typedef struct {
     uint32_t capabilities;
     uint32_t queued_messages;
     uint32_t queue_capacity;
+    uint32_t queue_free_slots;
+    uint32_t queue_utilization_percent;
+    uint64_t queue_compactions;
+    uint64_t queue_compaction_moves;
+    uint64_t backpressure_recoveries;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -207,6 +212,9 @@ typedef struct {
     uint64_t automatic_retry_attempts;
     uint64_t delivery_deadlines_expired;
     uint64_t messages_expired;
+    uint64_t queue_compactions;
+    uint64_t queue_compaction_moves;
+    uint64_t backpressure_recoveries;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -241,6 +249,8 @@ typedef struct {
     uint64_t deadline_aware_selections;
     uint64_t starvation_preventions;
     uint64_t qos_profile_selections;
+    uint64_t queue_compactions;
+    uint64_t queue_compaction_moves;
 } scheduler_ipc_channel_t;
 typedef struct {
     volatile uint32_t count;
@@ -304,6 +314,7 @@ bool scheduler_ipc_service_set_qos_profile(scheduler_ipc_service_id_t service_id
 bool scheduler_ipc_deadline_qos_self_test(void);
 bool scheduler_ipc_service_set_default_ttl(scheduler_ipc_service_id_t service_id, uint64_t ttl_ticks);
 bool scheduler_ipc_expiration_self_test(void);
+bool scheduler_ipc_queue_telemetry_self_test(void);
 bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
                                           uint32_t burst_capacity,
                                           uint32_t refill_tokens,

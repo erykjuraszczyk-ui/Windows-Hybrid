@@ -160,3 +160,8 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 ## Następny etap — HYBRID OS v0.22.0
 
 **Status: specyfikacja na gałęzi funkcji; implementacja i walidacja QEMU jeszcze nie rozpoczęte.** Zakres: osobny TTL wiadomości IPC, domyślna polityka per usługa, usuwanie przeterminowanych wpisów przed odbiorem, integracja z receipt/DLQ/trace i regresja QEMU. Szczegóły: [specyfikacja v0.22.0](docs/BOOTSTRAP_v0.22.0.md).
+
+
+## HYBRID OS v0.23.0 — IPC Queue Compaction & Backpressure Recovery
+
+**Status: CI PASS w QEMU na gałęzi funkcji.** [GitHub Actions #41107058942](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41107058942) potwierdził kompilację, test QEMU i markery `IPC_QUEUE_TELEMETRY_SELFTEST_OK` oraz `BOOT_OK`. Kolejki raportują wolne sloty, procent wykorzystania, liczbę kompaktowań/przesunięć i odzyskań backpressure. Histereza wykorzystuje high/low watermark; wysyłanie wraca dopiero po zejściu kolejki do low watermark. Szczegóły: [specyfikacja v0.23.0](docs/BOOTSTRAP_v0.23.0.md).

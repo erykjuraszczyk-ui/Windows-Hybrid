@@ -57,6 +57,9 @@ static uint64_t ipc_diag_deadline_aware_selections;
 static uint64_t ipc_diag_starvation_preventions;
 static uint64_t ipc_diag_qos_profile_selections;
 static uint64_t ipc_diag_messages_expired;
+static uint64_t ipc_diag_queue_compactions;
+static uint64_t ipc_diag_queue_compaction_moves;
+static uint64_t ipc_diag_backpressure_recoveries;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -757,6 +760,8 @@ void scheduler_ipc_channel_init(scheduler_ipc_channel_t *channel) {
     channel->deadline_aware_selections = 0U;
     channel->starvation_preventions = 0U;
     channel->qos_profile_selections = 0U;
+    channel->queue_compactions = 0U;
+    channel->queue_compaction_moves = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_CAPACITY; ++i) {
         channel->messages[i].type = 0U;
         channel->messages[i].length = 0U;
@@ -868,6 +873,10 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 channel->head = 0U;
                 channel->count = live_count;
                 channel->tail = live_count % SCHEDULER_IPC_CAPACITY;
+                ++channel->queue_compactions;
+                ++ipc_diag_queue_compactions;
+                channel->queue_compaction_moves += live_count;
+                ipc_diag_queue_compaction_moves += live_count;
                 if (channel->writers.waiters != 0U)
                     (void)wait_queue_wake_one_locked(&channel->writers);
             }
@@ -952,6 +961,13 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 ++channel->qos_profile_selections;
             const uint32_t selected_index = (channel->head + selected_offset) % SCHEDULER_IPC_CAPACITY;
             scheduler_ipc_message_copy(message, &channel->messages[selected_index]);
+            if (selected_offset + 1U < channel->count) {
+                ++channel->queue_compactions;
+                ++ipc_diag_queue_compactions;
+                const uint32_t moved = channel->count - selected_offset - 1U;
+                channel->queue_compaction_moves += moved;
+                ipc_diag_queue_compaction_moves += moved;
+            }
             for (uint32_t offset = selected_offset; offset + 1U < channel->count; ++offset) {
                 const uint32_t dst = (channel->head + offset) % SCHEDULER_IPC_CAPACITY;
                 const uint32_t src = (channel->head + offset + 1U) % SCHEDULER_IPC_CAPACITY;
@@ -1127,6 +1143,7 @@ typedef struct {
     bool priority_admission_enabled;
     uint64_t source_quota_rejections;
     uint64_t priority_preemptions;
+    uint64_t backpressure_recoveries;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1242,6 +1259,7 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->active_calls = 0U;
     service->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     service->queue_high_watermark = 0U;
+    service->backpressure_recoveries = 0U;
     service->messages_enqueued = 0U;
     service->messages_received = 0U;
     service->backpressure_events = 0U;
@@ -1368,6 +1386,7 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->active_calls = 0U;
     free_slot->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     free_slot->queue_high_watermark = 0U;
+    free_slot->backpressure_recoveries = 0U;
     free_slot->priority = 1U;
     free_slot->qos_profile = SCHEDULER_IPC_QOS_NORMAL;
     free_slot->default_deadline_budget_ticks = 0U;
@@ -1441,6 +1460,11 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->capabilities = service->capabilities;
     info->queued_messages = service->channel.count;
     info->queue_capacity = SCHEDULER_IPC_CAPACITY;
+    info->queue_free_slots = service->channel.count <= SCHEDULER_IPC_CAPACITY ? SCHEDULER_IPC_CAPACITY - service->channel.count : 0U;
+    info->queue_utilization_percent = service->channel.count <= SCHEDULER_IPC_CAPACITY ? (service->channel.count * 100U) / SCHEDULER_IPC_CAPACITY : 100U;
+    info->queue_compactions = service->channel.queue_compactions;
+    info->queue_compaction_moves = service->channel.queue_compaction_moves;
+    info->backpressure_recoveries = service->backpressure_recoveries;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1657,6 +1681,7 @@ bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t ser
     service->congestion_low_watermark = low_watermark;
     service->congestion_control_enabled = true;
     service->congested = service->channel.count >= high_watermark;
+    service->backpressure_recoveries = 0U;
     scheduler_irq_restore(flags);
     return true;
 }
@@ -2015,6 +2040,11 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
                 }
                 channel->tail = (channel->tail + SCHEDULER_IPC_CAPACITY - 1U) % SCHEDULER_IPC_CAPACITY;
                 --channel->count;
+                ++channel->queue_compactions;
+                ++ipc_diag_queue_compactions;
+                const uint32_t moved = channel->count > victim_offset ? channel->count - victim_offset : 0U;
+                channel->queue_compaction_moves += moved;
+                ipc_diag_queue_compaction_moves += moved;
                 ++destination->priority_preemptions;
                 ++ipc_diag_priority_preemptions;
                 result = SCHEDULER_IPC_DELIVERY_PRIORITY_PREEMPTED;
@@ -2141,8 +2171,11 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
         ++service->messages_received;
         ++ipc_diag_messages_received;
         if (service->congestion_control_enabled && service->congested &&
-            service->channel.count <= service->congestion_low_watermark)
+            service->channel.count <= service->congestion_low_watermark) {
             service->congested = false;
+            ++service->backpressure_recoveries;
+            ++ipc_diag_backpressure_recoveries;
+        }
         scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_RECEIVE,message->source_service_id,service_id,message->request_id,message->delivery_id,SCHEDULER_IPC_DELIVERY_DELIVERED,service->channel.count);
         if (message->delivery_id != 0U) {
             service->received_delivery_ids[service->received_delivery_cursor] = message->delivery_id;
@@ -2854,6 +2887,32 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 
+
+
+bool scheduler_ipc_queue_telemetry_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("telemetry.src", caps, &source) || !scheduler_ipc_service_register_ex("telemetry.dst", caps, &destination)) return false;
+    if (!scheduler_ipc_service_set_congestion_control(destination, 3U, 1U)) return false;
+    scheduler_ipc_message_t message = {0}; message.type = UINT32_C(0x5154454C); message.length = 1U;
+    for (uint32_t i = 1U; i <= 3U; ++i) { message.payload[0] = (uint8_t)i; if (scheduler_ipc_service_send_ex(source, destination, i, &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false; }
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested || info.queued_messages != 3U || info.queue_free_slots != 1U || info.queue_utilization_percent != 75U || info.queue_high_watermark != 3U) return false;
+    if (scheduler_ipc_service_send_ex(source, destination, 4U, &message) != SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 1U) return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested || info.queue_utilization_percent != 50U) return false;
+    if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 2U) return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || info.congested || info.queue_free_slots != 3U || info.queue_utilization_percent != 25U || info.backpressure_recoveries != 1U) return false;
+    if (scheduler_ipc_service_send_ex(source, destination, 5U, &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || info.queue_compactions == 0U || info.queue_compaction_moves == 0U || info.backpressure_recoveries != 1U) return false;
+    scheduler_ipc_diagnostics_t diag = {0}; scheduler_ipc_get_diagnostics(&diag);
+    const bool counters = diag.queue_compactions >= info.queue_compactions && diag.queue_compaction_moves >= info.queue_compaction_moves && diag.backpressure_recoveries >= 1U;
+    const bool cleanup = scheduler_ipc_service_unregister(destination) && scheduler_ipc_service_unregister(source) && scheduler_ipc_service_count() == 0U;
+    return counters && cleanup;
+}
+
 bool scheduler_ipc_expiration_self_test(void) {
     scheduler_ipc_channel_t channel;
     scheduler_ipc_message_t message = {0}, received = {0};
@@ -3414,6 +3473,9 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->automatic_retry_attempts = ipc_diag_automatic_retry_attempts;
     diagnostics->delivery_deadlines_expired = ipc_diag_delivery_deadlines_expired;
     diagnostics->messages_expired = ipc_diag_messages_expired;
+    diagnostics->queue_compactions = ipc_diag_queue_compactions;
+    diagnostics->queue_compaction_moves = ipc_diag_queue_compaction_moves;
+    diagnostics->backpressure_recoveries = ipc_diag_backpressure_recoveries;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
