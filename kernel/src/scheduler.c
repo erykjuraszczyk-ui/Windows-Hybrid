@@ -62,6 +62,11 @@ static uint64_t ipc_diag_queue_compaction_moves;
 static uint64_t ipc_diag_backpressure_recoveries;
 static uint64_t ipc_diag_adaptive_admission_adjustments;
 static uint64_t ipc_diag_adaptive_pressure_events;
+static uint64_t ipc_diag_predictive_samples;
+static uint64_t ipc_diag_predictive_rising_predictions;
+static uint64_t ipc_diag_predictive_falling_predictions;
+static uint64_t ipc_diag_predictive_budget_adjustments;
+static uint64_t ipc_diag_predictive_budget_rejections;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1151,6 +1156,19 @@ typedef struct {
     uint32_t adaptive_max_high_watermark;
     uint64_t adaptive_admission_adjustments;
     uint64_t adaptive_pressure_events;
+    bool predictive_admission_enabled;
+    uint32_t predictive_min_budget;
+    uint32_t predictive_max_budget;
+    uint32_t predictive_current_budget;
+    uint32_t predictive_samples[SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW];
+    uint32_t predictive_sample_cursor;
+    uint32_t predictive_sample_count;
+    scheduler_ipc_pressure_trend_t predictive_trend;
+    uint64_t predictive_total_samples;
+    uint64_t predictive_rising_predictions;
+    uint64_t predictive_falling_predictions;
+    uint64_t predictive_budget_adjustments;
+    uint64_t predictive_budget_rejections;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1272,6 +1290,20 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->adaptive_max_high_watermark = 0U;
     service->adaptive_admission_adjustments = 0U;
     service->adaptive_pressure_events = 0U;
+    service->predictive_admission_enabled = false;
+    service->predictive_min_budget = 0U;
+    service->predictive_max_budget = 0U;
+    service->predictive_current_budget = 0U;
+    service->predictive_sample_cursor = 0U;
+    service->predictive_sample_count = 0U;
+    service->predictive_trend = SCHEDULER_IPC_PRESSURE_STABLE;
+    service->predictive_total_samples = 0U;
+    service->predictive_rising_predictions = 0U;
+    service->predictive_falling_predictions = 0U;
+    service->predictive_budget_adjustments = 0U;
+    service->predictive_budget_rejections = 0U;
+    for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
+        service->predictive_samples[sample] = 0U;
     service->messages_enqueued = 0U;
     service->messages_received = 0U;
     service->backpressure_events = 0U;
@@ -1404,6 +1436,20 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->adaptive_max_high_watermark = 0U;
     free_slot->adaptive_admission_adjustments = 0U;
     free_slot->adaptive_pressure_events = 0U;
+    free_slot->predictive_admission_enabled = false;
+    free_slot->predictive_min_budget = 0U;
+    free_slot->predictive_max_budget = 0U;
+    free_slot->predictive_current_budget = 0U;
+    free_slot->predictive_sample_cursor = 0U;
+    free_slot->predictive_sample_count = 0U;
+    free_slot->predictive_trend = SCHEDULER_IPC_PRESSURE_STABLE;
+    free_slot->predictive_total_samples = 0U;
+    free_slot->predictive_rising_predictions = 0U;
+    free_slot->predictive_falling_predictions = 0U;
+    free_slot->predictive_budget_adjustments = 0U;
+    free_slot->predictive_budget_rejections = 0U;
+    for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
+        free_slot->predictive_samples[sample] = 0U;
     free_slot->priority = 1U;
     free_slot->qos_profile = SCHEDULER_IPC_QOS_NORMAL;
     free_slot->default_deadline_budget_ticks = 0U;
@@ -1489,6 +1535,17 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->congestion_low_watermark = service->congestion_low_watermark;
     info->adaptive_admission_adjustments = service->adaptive_admission_adjustments;
     info->adaptive_pressure_events = service->adaptive_pressure_events;
+    info->predictive_admission_enabled = service->predictive_admission_enabled;
+    info->predictive_min_budget = service->predictive_min_budget;
+    info->predictive_max_budget = service->predictive_max_budget;
+    info->predictive_current_budget = service->predictive_current_budget;
+    info->predictive_sample_count = service->predictive_sample_count;
+    info->predictive_trend = service->predictive_trend;
+    info->predictive_samples = service->predictive_total_samples;
+    info->predictive_rising_predictions = service->predictive_rising_predictions;
+    info->predictive_falling_predictions = service->predictive_falling_predictions;
+    info->predictive_budget_adjustments = service->predictive_budget_adjustments;
+    info->predictive_budget_rejections = service->predictive_budget_rejections;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1866,6 +1923,45 @@ bool scheduler_ipc_service_unregister(scheduler_ipc_service_id_t service_id) {
     return true;
 }
 
+static void scheduler_ipc_record_pressure_sample_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL || !service->predictive_admission_enabled) return;
+    service->predictive_samples[service->predictive_sample_cursor] = service->channel.count;
+    service->predictive_sample_cursor =
+        (service->predictive_sample_cursor + 1U) % SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW;
+    if (service->predictive_sample_count < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW)
+        ++service->predictive_sample_count;
+    ++service->predictive_total_samples;
+    ++ipc_diag_predictive_samples;
+    if (service->predictive_sample_count < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW) return;
+
+    const uint32_t oldest = service->predictive_samples[service->predictive_sample_cursor];
+    const uint32_t newest_index =
+        (service->predictive_sample_cursor + SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW - 1U) %
+        SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW;
+    const uint32_t newest = service->predictive_samples[newest_index];
+    if (newest > oldest) {
+        service->predictive_trend = SCHEDULER_IPC_PRESSURE_RISING;
+        ++service->predictive_rising_predictions;
+        ++ipc_diag_predictive_rising_predictions;
+        if (service->predictive_current_budget > service->predictive_min_budget) {
+            --service->predictive_current_budget;
+            ++service->predictive_budget_adjustments;
+            ++ipc_diag_predictive_budget_adjustments;
+        }
+    } else if (newest < oldest) {
+        service->predictive_trend = SCHEDULER_IPC_PRESSURE_FALLING;
+        ++service->predictive_falling_predictions;
+        ++ipc_diag_predictive_falling_predictions;
+        if (service->predictive_current_budget < service->predictive_max_budget) {
+            ++service->predictive_current_budget;
+            ++service->predictive_budget_adjustments;
+            ++ipc_diag_predictive_budget_adjustments;
+        }
+    } else {
+        service->predictive_trend = SCHEDULER_IPC_PRESSURE_STABLE;
+    }
+}
+
 static void scheduler_ipc_record_enqueue_locked(scheduler_ipc_service_t *service) {
     if (service == NULL) return;
     ++service->messages_enqueued;
@@ -1874,6 +1970,7 @@ static void scheduler_ipc_record_enqueue_locked(scheduler_ipc_service_t *service
         service->queue_high_watermark = service->channel.count;
     if (service->channel.count > ipc_diag_max_queue_depth)
         ipc_diag_max_queue_depth = service->channel.count;
+    scheduler_ipc_record_pressure_sample_locked(service);
 }
 
 static bool scheduler_ipc_delivery_accepted(scheduler_ipc_delivery_result_t result) {
@@ -2048,6 +2145,13 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
             scheduler_irq_restore(flags);
             return SCHEDULER_IPC_DELIVERY_SOURCE_QUOTA;
         }
+    }
+    if (destination->predictive_admission_enabled &&
+        channel->count >= destination->predictive_current_budget) {
+        ++destination->predictive_budget_rejections;
+        ++ipc_diag_predictive_budget_rejections;
+        scheduler_irq_restore(flags);
+        return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
     }
     if (destination->congestion_control_enabled && destination->congested) {
         ++destination->backpressure_events;
@@ -2230,6 +2334,7 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
     if (received) {
         ++service->messages_received;
         ++ipc_diag_messages_received;
+        scheduler_ipc_record_pressure_sample_locked(service);
         if (service->congestion_control_enabled && service->congested &&
             service->channel.count <= service->congestion_low_watermark) {
             service->congested = false;
@@ -2958,6 +3063,36 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 
+bool scheduler_ipc_service_set_predictive_admission(
+    scheduler_ipc_service_id_t service_id,
+    uint32_t min_budget,
+    uint32_t max_budget) {
+    if (min_budget == 0U || min_budget > max_budget ||
+        max_budget > SCHEDULER_IPC_CAPACITY) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->predictive_admission_enabled = true;
+    service->predictive_min_budget = min_budget;
+    service->predictive_max_budget = max_budget;
+    service->predictive_current_budget = max_budget;
+    service->predictive_sample_cursor = 0U;
+    service->predictive_sample_count = 0U;
+    service->predictive_trend = SCHEDULER_IPC_PRESSURE_STABLE;
+    service->predictive_total_samples = 0U;
+    service->predictive_rising_predictions = 0U;
+    service->predictive_falling_predictions = 0U;
+    service->predictive_budget_adjustments = 0U;
+    service->predictive_budget_rejections = 0U;
+    for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
+        service->predictive_samples[sample] = 0U;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
 bool scheduler_ipc_adaptive_admission_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, destination = 0U;
@@ -3592,6 +3727,11 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->backpressure_recoveries = ipc_diag_backpressure_recoveries;
     diagnostics->adaptive_admission_adjustments = ipc_diag_adaptive_admission_adjustments;
     diagnostics->adaptive_pressure_events = ipc_diag_adaptive_pressure_events;
+    diagnostics->predictive_samples = ipc_diag_predictive_samples;
+    diagnostics->predictive_rising_predictions = ipc_diag_predictive_rising_predictions;
+    diagnostics->predictive_falling_predictions = ipc_diag_predictive_falling_predictions;
+    diagnostics->predictive_budget_adjustments = ipc_diag_predictive_budget_adjustments;
+    diagnostics->predictive_budget_rejections = ipc_diag_predictive_budget_rejections;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
