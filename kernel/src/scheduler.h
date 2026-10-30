@@ -142,6 +142,8 @@ typedef struct {
     bool adaptive_admission_enabled;
     uint32_t adaptive_min_high_watermark;
     uint32_t adaptive_max_high_watermark;
+    uint32_t congestion_high_watermark;
+    uint32_t congestion_low_watermark;
     uint64_t adaptive_admission_adjustments;
     uint64_t adaptive_pressure_events;
     scheduler_ipc_queue_policy_t queue_policy;
