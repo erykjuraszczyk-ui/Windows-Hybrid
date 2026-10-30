@@ -2986,11 +2986,11 @@ bool scheduler_ipc_adaptive_admission_self_test(void) {
     if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 1U)
         return false;
     if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested ||
-        info.queue_high_watermark != 2U) return false;
+        info.congestion_high_watermark != 2U) return false;
     if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 2U)
         return false;
     if (!scheduler_ipc_service_get_info(destination, &info) || info.congested ||
-        info.queue_high_watermark != 3U || info.backpressure_recoveries != 1U ||
+        info.congestion_high_watermark != 3U || info.backpressure_recoveries != 1U ||
         info.adaptive_admission_adjustments != 2U) return false;
     if (scheduler_ipc_service_send_ex(source, destination, 5U, &message) !=
         SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
@@ -3012,7 +3012,7 @@ bool scheduler_ipc_queue_telemetry_self_test(void) {
     scheduler_ipc_message_t message = {0}; message.type = UINT32_C(0x5154454C); message.length = 1U;
     for (uint32_t i = 1U; i <= 3U; ++i) { message.payload[0] = (uint8_t)i; if (scheduler_ipc_service_send_ex(source, destination, i, &message) != SCHEDULER_IPC_DELIVERY_DELIVERED) return false; }
     scheduler_ipc_service_info_t info = {0};
-    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested || info.queued_messages != 3U || info.queue_free_slots != 1U || info.queue_utilization_percent != 75U || info.queue_high_watermark != 3U) return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested || info.queued_messages != 3U || info.queue_free_slots != 1U || info.queue_utilization_percent != 75U || info.congestion_high_watermark != 3U) return false;
     if (scheduler_ipc_service_send_ex(source, destination, 4U, &message) != SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
     scheduler_ipc_message_t received = {0};
     if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 1U) return false;
