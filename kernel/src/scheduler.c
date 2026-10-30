@@ -1475,6 +1475,11 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->arbitration_pressure_skips = 0U;
     free_slot->arbitration_qos_adjustments = 0U;
     free_slot->arbitration_last_score = 0U;
+    free_slot->arbitration_deficit_credit = 0U;
+    free_slot->arbitration_wait_rounds = 0U;
+    free_slot->arbitration_credit_earned = 0U;
+    free_slot->arbitration_credit_spent = 0U;
+    free_slot->arbitration_starvation_protections = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         free_slot->predictive_samples[sample] = 0U;
     free_slot->priority = 1U;
