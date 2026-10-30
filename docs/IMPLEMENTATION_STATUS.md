@@ -273,8 +273,8 @@ The first CI attempt exposed two compile-time issues in the new pruning path: de
 
 ## HYBRID OS v0.23.0 — IPC Queue Compaction, Capacity Telemetry & Backpressure Recovery
 
-**Status: implementation committed on feature branch; CI validation pending.** Dodano liczniki kompaktowania i przesunięć wiadomości, migawkę wolnych slotów i procent wykorzystania kolejki, a także licznik przejść ze stanu przeciążenia do odzyskania. Histereza pozostaje oparta o dwa progi: high_watermark aktywuje backpressure, low_watermark zwalnia go dopiero po opróżnieniu kolejki do bezpiecznego poziomu.
+**Status: CI PASS w QEMU na gałęzi funkcji.** Przebieg [GitHub Actions #41107058942](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41107058942) potwierdził kompilację, `IPC_QUEUE_TELEMETRY_SELFTEST_OK`, `BOOT_OK` i końcowy marker `PASS`. Dodano liczniki kompaktowania i przesunięć wiadomości, migawkę wolnych slotów i procent wykorzystania kolejki, a także licznik przejść ze stanu przeciążenia do odzyskania. Histereza pozostaje oparta o dwa progi: high_watermark aktywuje backpressure, low_watermark zwalnia go dopiero po opróżnieniu kolejki do bezpiecznego poziomu.
 
-Test QEMU sprawdza wykorzystanie 75%, 50% i 25%, liczbę wolnych slotów, odrzucenie wysyłki przy przeciążeniu oraz pojedyncze zarejestrowanie odzyskania. Status PASS dopiero po CI z markerami IPC_QUEUE_TELEMETRY_SELFTEST_OK i BOOT_OK.
+Test QEMU sprawdza wykorzystanie 75%, 50% i 25%, liczbę wolnych slotów, odrzucenie wysyłki przy przeciążeniu oraz pojedyncze zarejestrowanie odzyskania. Wynik CI potwierdził markery `HYBRID: IPC_QUEUE_TELEMETRY_SELFTEST_OK` i `HYBRID: BOOT_OK`.
 
 **Ograniczenia:** kolejka pozostaje stała (4 wpisy), dane telemetryczne są ulotne, a synchronizacja nadal zakłada single-core Ring 0. Nie ma SMP ani trwałego magazynu metryk.
