@@ -287,3 +287,27 @@ Test QEMU sprawdza wykorzystanie 75%, 50% i 25%, liczbę wolnych slotów, odrzuc
 Test QEMU weryfikuje cykl high 3 → 2 → 3, zachowanie backpressure do osiągnięcia low watermark i ponowne przyjęcie wiadomości.
 
 **Ograniczenia:** pojemność bufora pozostaje stała (4); adaptowany jest próg przyjmowania, nie alokacja pamięci. Synchronizacja pozostaje single-core Ring 0.
+
+
+## HYBRID OS v0.25.0 — IPC Predictive Queue Pressure & Admission Budgeting
+
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41119034625](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41119034625) potwierdził kompilację, testy QEMU, marker `IPC_PREDICTIVE_PRESSURE_SELFTEST_OK` i `BOOT_OK`.
+
+- Czteropróbkowe, statyczne okno głębokości kolejki dla każdej usługi.
+- Deterministyczna klasyfikacja trendu RISING/STABLE/FALLING.
+- Ograniczony budżet admission z konfigurowalnym minimum i maksimum.
+- Liczniki próbek, prognoz trendu, korekt budżetu i odrzuceń.
+
+**Ograniczenia:** trend lokalny nie gwarantuje przyszłego obciążenia; kolejka pozostaje stała (4 wpisy), bez alokacji dynamicznej i SMP.
+
+## HYBRID OS v0.26.0 — IPC Congestion-Aware Scheduling & QoS Arbitration
+
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41120081706](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41120081706) potwierdził kompilację, test QEMU, marker `IPC_QOS_ARBITRATION_SELFTEST_OK` i `BOOT_OK`.
+
+- Rozszerzono selektor adaptacyjny o ocenę obciążenia, priorytetu, QoS, trendu predykcyjnego i wykorzystania budżetu.
+- Kandydaci przeciążeni lub z wyczerpanym predictive budget są pomijani.
+- Profile BEST_EFFORT, NORMAL, LATENCY_SENSITIVE i DEADLINE_CRITICAL otrzymują różne wagi oceny.
+- Rotacja remisów zachowuje sprawiedliwość wyboru.
+- Dodano migawki per-usługa oraz globalne liczniki selekcji, pominięć presji i korekt QoS.
+
+**Ograniczenia:** to arbitraż usług IPC, a nie globalny scheduler CPU. QoS nie daje gwarancji twardych deadline'ów. Synchronizacja pozostaje single-core Ring 0; kolejka ma stałą pojemność 4.

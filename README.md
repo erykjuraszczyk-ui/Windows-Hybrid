@@ -170,3 +170,14 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 ## HYBRID OS v0.24.0 — IPC Dynamic Admission Control
 
 **Status: implementation committed on feature branch; CI validation pending.** Nowy kontroler dynamicznie obniża próg high po kolejnych sygnałach przeciążenia i podnosi go po odzyskaniu kolejki. Zakres jest ograniczony do skonfigurowanych wartości min/max; rozmiar kolejki pozostaje stały. Szczegóły: [specyfikacja v0.24.0](docs/BOOTSTRAP_v0.24.0.md).
+
+
+## HYBRID OS v0.25.0 — IPC Predictive Queue Pressure & Admission Budgeting
+
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41119034625](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41119034625) potwierdził kompilację, QEMU, `IPC_PREDICTIVE_PRESSURE_SELFTEST_OK` i `BOOT_OK`. Dodano czteropróbkowe okno trendu kolejki, deterministyczną klasyfikację RISING/STABLE/FALLING i ograniczony budżet przyjęć per usługa. Pojemność kanału pozostaje stała (4); predykcja nie jest ML ani gwarancją przyszłego obciążenia.
+
+## HYBRID OS v0.26.0 — IPC Congestion-Aware Scheduling & QoS Arbitration
+
+**Status: CI PASS na gałęzi funkcji; PR draft oczekuje na v0.25.0.** GitHub Actions [#41120081706](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41120081706) potwierdził kompilację, QEMU, `IPC_QOS_ARBITRATION_SELFTEST_OK` i `BOOT_OK`. Selektor usług uwzględnia teraz obciążenie kolejki, priorytet, profil QoS, trend predykcyjny i pozostały budżet admission. Liczniki arbitrażu są dostępne per usługa i globalnie. Remisy rozstrzyga rotacja, aby ograniczać trwałe faworyzowanie jednego kandydata.
+
+**Ograniczenia:** arbitraż wybiera usługę docelową, nie planuje zadań CPU. QoS jest preferencją wyboru, nie twardą gwarancją deadline’u. Brak dynamicznej alokacji, zmiany pojemności kolejki i gwarancji SMP.

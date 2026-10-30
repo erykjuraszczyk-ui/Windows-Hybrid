@@ -163,6 +163,10 @@ typedef struct {
     uint64_t predictive_falling_predictions;
     uint64_t predictive_budget_adjustments;
     uint64_t predictive_budget_rejections;
+    uint64_t arbitration_selections;
+    uint64_t arbitration_pressure_skips;
+    uint64_t arbitration_qos_adjustments;
+    uint32_t arbitration_last_score;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -246,6 +250,9 @@ typedef struct {
     uint64_t predictive_falling_predictions;
     uint64_t predictive_budget_adjustments;
     uint64_t predictive_budget_rejections;
+    uint64_t arbitration_selections;
+    uint64_t arbitration_pressure_skips;
+    uint64_t arbitration_qos_adjustments;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -367,6 +374,7 @@ bool scheduler_ipc_service_set_predictive_admission(scheduler_ipc_service_id_t s
                                                       uint32_t min_budget,
                                                       uint32_t max_budget);
 bool scheduler_ipc_predictive_pressure_self_test(void);
+bool scheduler_ipc_qos_arbitration_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
