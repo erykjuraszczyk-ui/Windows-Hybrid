@@ -56,6 +56,7 @@ static uint64_t ipc_diag_fair_receive_selections;
 static uint64_t ipc_diag_deadline_aware_selections;
 static uint64_t ipc_diag_starvation_preventions;
 static uint64_t ipc_diag_qos_profile_selections;
+static uint64_t ipc_diag_messages_expired;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -868,7 +869,7 @@ bool scheduler_ipc_receive(scheduler_ipc_channel_t *channel,
                 channel->count = live_count;
                 channel->tail = live_count % SCHEDULER_IPC_CAPACITY;
                 if (channel->writers.waiters != 0U)
-                    (void)wait_queue_wake_all_locked(&channel->writers);
+                    (void)wait_queue_wake_one_locked(&channel->writers);
             }
         }
         if (channel->count > 0U) {
@@ -1177,7 +1178,6 @@ static scheduler_ipc_delivery_track_t ipc_delivery_tracks[SCHEDULER_IPC_MAX_TRAC
 static scheduler_ipc_service_id_t next_ipc_service_id = 1U;
 static uint64_t ipc_diag_messages_enqueued;
 static uint64_t ipc_diag_messages_received;
-static uint64_t ipc_diag_messages_expired;
 static uint64_t ipc_diag_backpressure_events;
 static uint64_t ipc_diag_messages_dropped_newest;
 static uint64_t ipc_diag_messages_dropped_oldest;
