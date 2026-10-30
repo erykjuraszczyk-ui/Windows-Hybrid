@@ -171,6 +171,7 @@ typedef struct {
     uint32_t delivery_id;
     uint64_t enqueue_tick;
     uint64_t deadline_tick;
+    uint64_t expiry_tick;
     scheduler_ipc_qos_profile_t qos_profile;
     uint8_t payload[SCHEDULER_IPC_PAYLOAD_SIZE];
 } scheduler_ipc_message_t;
@@ -205,6 +206,7 @@ typedef struct {
     uint64_t duplicate_deliveries_suppressed;
     uint64_t automatic_retry_attempts;
     uint64_t delivery_deadlines_expired;
+    uint64_t messages_expired;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -300,6 +302,8 @@ bool scheduler_ipc_service_set_qos_profile(scheduler_ipc_service_id_t service_id
                                            uint64_t default_deadline_budget_ticks,
                                            uint64_t starvation_threshold_ticks);
 bool scheduler_ipc_deadline_qos_self_test(void);
+bool scheduler_ipc_service_set_default_ttl(scheduler_ipc_service_id_t service_id, uint64_t ttl_ticks);
+bool scheduler_ipc_expiration_self_test(void);
 bool scheduler_ipc_service_set_rate_limit(scheduler_ipc_service_id_t service_id,
                                           uint32_t burst_capacity,
                                           uint32_t refill_tokens,
