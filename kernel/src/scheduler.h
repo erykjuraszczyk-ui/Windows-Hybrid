@@ -139,6 +139,11 @@ typedef struct {
     uint64_t queue_compactions;
     uint64_t queue_compaction_moves;
     uint64_t backpressure_recoveries;
+    bool adaptive_admission_enabled;
+    uint32_t adaptive_min_high_watermark;
+    uint32_t adaptive_max_high_watermark;
+    uint64_t adaptive_admission_adjustments;
+    uint64_t adaptive_pressure_events;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -215,6 +220,8 @@ typedef struct {
     uint64_t queue_compactions;
     uint64_t queue_compaction_moves;
     uint64_t backpressure_recoveries;
+    uint64_t adaptive_admission_adjustments;
+    uint64_t adaptive_pressure_events;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -328,6 +335,10 @@ bool scheduler_ipc_rate_limit_self_test(void);
 bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
                                                     uint32_t high_watermark,
                                                     uint32_t low_watermark);
+bool scheduler_ipc_service_set_adaptive_admission(scheduler_ipc_service_id_t service_id,
+                                                   uint32_t min_high_watermark,
+                                                   uint32_t max_high_watermark);
+bool scheduler_ipc_adaptive_admission_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
