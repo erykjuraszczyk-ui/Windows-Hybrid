@@ -278,3 +278,12 @@ The first CI attempt exposed two compile-time issues in the new pruning path: de
 Test QEMU sprawdza wykorzystanie 75%, 50% i 25%, liczbę wolnych slotów, odrzucenie wysyłki przy przeciążeniu oraz pojedyncze zarejestrowanie odzyskania. Wynik CI potwierdził markery `HYBRID: IPC_QUEUE_TELEMETRY_SELFTEST_OK` i `HYBRID: BOOT_OK`.
 
 **Ograniczenia:** kolejka pozostaje stała (4 wpisy), dane telemetryczne są ulotne, a synchronizacja nadal zakłada single-core Ring 0. Nie ma SMP ani trwałego magazynu metryk.
+
+
+## HYBRID OS v0.24.0 — IPC Dynamic Admission Control & Adaptive Queue Pressure Management
+
+**Status: implementation committed on feature branch; CI validation pending.** Dodano opcjonalny kontroler adaptacyjny per usługa. Przy odrzuceniu z powodu backpressure próg high maleje o jeden, nie poniżej skonfigurowanego minimum. Po opróżnieniu kolejki do low kontroler odzyskuje stan i podnosi high o jeden, maksymalnie do limitu. Liczniki per-usługa i globalne rejestrują korekty i zdarzenia presji.
+
+Test QEMU weryfikuje cykl high 3 → 2 → 3, zachowanie backpressure do osiągnięcia low watermark i ponowne przyjęcie wiadomości.
+
+**Ograniczenia:** pojemność bufora pozostaje stała (4); adaptowany jest próg przyjmowania, nie alokacja pamięci. Synchronizacja pozostaje single-core Ring 0.
