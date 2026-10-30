@@ -165,3 +165,8 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 ## HYBRID OS v0.23.0 — IPC Queue Compaction & Backpressure Recovery
 
 **Status: CI PASS w QEMU na gałęzi funkcji.** [GitHub Actions #41107058942](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41107058942) potwierdził kompilację, test QEMU i markery `IPC_QUEUE_TELEMETRY_SELFTEST_OK` oraz `BOOT_OK`. Kolejki raportują wolne sloty, procent wykorzystania, liczbę kompaktowań/przesunięć i odzyskań backpressure. Histereza wykorzystuje high/low watermark; wysyłanie wraca dopiero po zejściu kolejki do low watermark. Szczegóły: [specyfikacja v0.23.0](docs/BOOTSTRAP_v0.23.0.md).
+
+
+## HYBRID OS v0.24.0 — IPC Dynamic Admission Control
+
+**Status: implementation committed on feature branch; CI validation pending.** Nowy kontroler dynamicznie obniża próg high po kolejnych sygnałach przeciążenia i podnosi go po odzyskaniu kolejki. Zakres jest ograniczony do skonfigurowanych wartości min/max; rozmiar kolejki pozostaje stały. Szczegóły: [specyfikacja v0.24.0](docs/BOOTSTRAP_v0.24.0.md).
