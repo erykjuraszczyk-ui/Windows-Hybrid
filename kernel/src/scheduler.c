@@ -60,6 +60,8 @@ static uint64_t ipc_diag_messages_expired;
 static uint64_t ipc_diag_queue_compactions;
 static uint64_t ipc_diag_queue_compaction_moves;
 static uint64_t ipc_diag_backpressure_recoveries;
+static uint64_t ipc_diag_adaptive_admission_adjustments;
+static uint64_t ipc_diag_adaptive_pressure_events;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1144,6 +1146,11 @@ typedef struct {
     uint64_t source_quota_rejections;
     uint64_t priority_preemptions;
     uint64_t backpressure_recoveries;
+    bool adaptive_admission_enabled;
+    uint32_t adaptive_min_high_watermark;
+    uint32_t adaptive_max_high_watermark;
+    uint64_t adaptive_admission_adjustments;
+    uint64_t adaptive_pressure_events;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1260,6 +1267,11 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     service->queue_high_watermark = 0U;
     service->backpressure_recoveries = 0U;
+    service->adaptive_admission_enabled = false;
+    service->adaptive_min_high_watermark = 0U;
+    service->adaptive_max_high_watermark = 0U;
+    service->adaptive_admission_adjustments = 0U;
+    service->adaptive_pressure_events = 0U;
     service->messages_enqueued = 0U;
     service->messages_received = 0U;
     service->backpressure_events = 0U;
@@ -1387,6 +1399,11 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->queue_policy = SCHEDULER_IPC_QUEUE_BLOCK;
     free_slot->queue_high_watermark = 0U;
     free_slot->backpressure_recoveries = 0U;
+    free_slot->adaptive_admission_enabled = false;
+    free_slot->adaptive_min_high_watermark = 0U;
+    free_slot->adaptive_max_high_watermark = 0U;
+    free_slot->adaptive_admission_adjustments = 0U;
+    free_slot->adaptive_pressure_events = 0U;
     free_slot->priority = 1U;
     free_slot->qos_profile = SCHEDULER_IPC_QOS_NORMAL;
     free_slot->default_deadline_budget_ticks = 0U;
@@ -1465,6 +1482,11 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->queue_compactions = service->channel.queue_compactions;
     info->queue_compaction_moves = service->channel.queue_compaction_moves;
     info->backpressure_recoveries = service->backpressure_recoveries;
+    info->adaptive_admission_enabled = service->adaptive_admission_enabled;
+    info->adaptive_min_high_watermark = service->adaptive_min_high_watermark;
+    info->adaptive_max_high_watermark = service->adaptive_max_high_watermark;
+    info->adaptive_admission_adjustments = service->adaptive_admission_adjustments;
+    info->adaptive_pressure_events = service->adaptive_pressure_events;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1688,6 +1710,32 @@ bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t ser
 
 /* Lower weighted queue occupancy wins; priority 8 has eight times the
  * effective capacity of priority 1. Ties rotate across the candidate list. */
+
+
+bool scheduler_ipc_service_set_adaptive_admission(scheduler_ipc_service_id_t service_id,
+                                                   uint32_t min_high_watermark,
+                                                   uint32_t max_high_watermark) {
+    if (min_high_watermark == 0U || min_high_watermark > max_high_watermark ||
+        max_high_watermark > SCHEDULER_IPC_CAPACITY) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->adaptive_admission_enabled = true;
+    service->adaptive_min_high_watermark = min_high_watermark;
+    service->adaptive_max_high_watermark = max_high_watermark;
+    service->adaptive_admission_adjustments = 0U;
+    service->adaptive_pressure_events = 0U;
+    service->congestion_control_enabled = true;
+    service->congestion_high_watermark = max_high_watermark;
+    service->congestion_low_watermark = max_high_watermark - 1U;
+    service->congested = service->channel.count >= service->congestion_high_watermark;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id) {
@@ -2002,6 +2050,16 @@ scheduler_ipc_delivery_result_t scheduler_ipc_service_send_ex(
     if (destination->congestion_control_enabled && destination->congested) {
         ++destination->backpressure_events;
         ++ipc_diag_backpressure_events;
+        if (destination->adaptive_admission_enabled) {
+            ++destination->adaptive_pressure_events;
+            ++ipc_diag_adaptive_pressure_events;
+            if (destination->congestion_high_watermark > destination->adaptive_min_high_watermark) {
+                --destination->congestion_high_watermark;
+                destination->congestion_low_watermark = destination->congestion_high_watermark - 1U;
+                ++destination->adaptive_admission_adjustments;
+                ++ipc_diag_adaptive_admission_adjustments;
+            }
+        }
         scheduler_irq_restore(flags);
         return SCHEDULER_IPC_DELIVERY_BACKPRESSURE;
     }
@@ -2175,6 +2233,13 @@ bool scheduler_ipc_service_receive(scheduler_ipc_service_id_t service_id,
             service->congested = false;
             ++service->backpressure_recoveries;
             ++ipc_diag_backpressure_recoveries;
+            if (service->adaptive_admission_enabled &&
+                service->congestion_high_watermark < service->adaptive_max_high_watermark) {
+                ++service->congestion_high_watermark;
+                service->congestion_low_watermark = service->congestion_high_watermark - 1U;
+                ++service->adaptive_admission_adjustments;
+                ++ipc_diag_adaptive_admission_adjustments;
+            }
         }
         scheduler_ipc_trace_record_locked(SCHEDULER_IPC_TRACE_RECEIVE,message->source_service_id,service_id,message->request_id,message->delivery_id,SCHEDULER_IPC_DELIVERY_DELIVERED,service->channel.count);
         if (message->delivery_id != 0U) {
@@ -2889,6 +2954,53 @@ bool scheduler_ipc_circuit_breaker_self_test(void) {
 
 
 
+
+
+bool scheduler_ipc_adaptive_admission_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("adaptive.src", caps, &source) ||
+        !scheduler_ipc_service_register_ex("adaptive.dst", caps, &destination)) return false;
+    if (!scheduler_ipc_service_set_adaptive_admission(destination, 1U, 3U)) return false;
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x41445054);
+    message.length = 1U;
+    for (uint32_t i = 1U; i <= 3U; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source, destination, i, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested ||
+        info.queue_high_watermark != 3U || !info.adaptive_admission_enabled) return false;
+    if (scheduler_ipc_service_send_ex(source, destination, 4U, &message) !=
+        SCHEDULER_IPC_DELIVERY_BACKPRESSURE) return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) ||
+        info.queue_high_watermark != 2U || info.adaptive_min_high_watermark != 1U ||
+        info.adaptive_max_high_watermark != 3U || info.adaptive_admission_adjustments != 1U ||
+        info.adaptive_pressure_events != 1U || !info.congested) return false;
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 1U)
+        return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || !info.congested ||
+        info.queue_high_watermark != 2U) return false;
+    if (!scheduler_ipc_service_receive(destination, &received) || received.request_id != 2U)
+        return false;
+    if (!scheduler_ipc_service_get_info(destination, &info) || info.congested ||
+        info.queue_high_watermark != 3U || info.backpressure_recoveries != 1U ||
+        info.adaptive_admission_adjustments != 2U) return false;
+    if (scheduler_ipc_service_send_ex(source, destination, 5U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    scheduler_ipc_diagnostics_t diag = {0};
+    scheduler_ipc_get_diagnostics(&diag);
+    const bool counters = diag.adaptive_admission_adjustments >= 2U &&
+        diag.adaptive_pressure_events >= 1U && diag.backpressure_recoveries >= 1U;
+    const bool cleanup = scheduler_ipc_service_unregister(destination) &&
+        scheduler_ipc_service_unregister(source) && scheduler_ipc_service_count() == 0U;
+    return counters && cleanup;
+}
+
 bool scheduler_ipc_queue_telemetry_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, destination = 0U;
@@ -3476,6 +3588,8 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->queue_compactions = ipc_diag_queue_compactions;
     diagnostics->queue_compaction_moves = ipc_diag_queue_compaction_moves;
     diagnostics->backpressure_recoveries = ipc_diag_backpressure_recoveries;
+    diagnostics->adaptive_admission_adjustments = ipc_diag_adaptive_admission_adjustments;
+    diagnostics->adaptive_pressure_events = ipc_diag_adaptive_pressure_events;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;
