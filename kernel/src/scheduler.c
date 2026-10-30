@@ -2984,6 +2984,82 @@ bool scheduler_ipc_timer_retry_dead_letter_self_test(void) {
 }
 
 
+bool scheduler_ipc_qos_arbitration_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, predictive = 0U, normal = 0U, critical = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("arb.src", caps, &source) ||
+        !scheduler_ipc_service_register_ex("arb.hot", caps, &predictive) ||
+        !scheduler_ipc_service_register_ex("arb.norm", caps, &normal) ||
+        !scheduler_ipc_service_register_ex("arb.crit", caps, &critical)) return false;
+    if (!scheduler_ipc_service_set_priority(predictive, 2U) ||
+        !scheduler_ipc_service_set_priority(normal, 1U) ||
+        !scheduler_ipc_service_set_priority(critical, 1U) ||
+        !scheduler_ipc_service_set_predictive_admission(predictive, 1U, 4U) ||
+        !scheduler_ipc_service_set_qos_profile(critical,
+            SCHEDULER_IPC_QOS_DEADLINE_CRITICAL, 10U, 0U)) return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x41524249);
+    message.length = 1U;
+    for (uint32_t i = 1U; i <= 3U; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source, predictive, i, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    scheduler_ipc_message_t received = {0};
+    if (!scheduler_ipc_service_receive(predictive, &received) ||
+        received.request_id != 1U) return false;
+
+    for (uint32_t i = 1U; i <= 2U; ++i) {
+        if (scheduler_ipc_service_send_ex(source, normal, 10U + i, &message) !=
+                SCHEDULER_IPC_DELIVERY_DELIVERED ||
+            scheduler_ipc_service_send_ex(source, critical, 20U + i, &message) !=
+                SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+    scheduler_ipc_service_info_t info = {0};
+    if (!scheduler_ipc_service_get_info(predictive, &info) ||
+        info.predictive_trend != SCHEDULER_IPC_PRESSURE_RISING ||
+        info.predictive_current_budget != 3U || info.queued_messages != 2U) return false;
+
+    scheduler_ipc_service_id_t candidates[3] = { predictive, normal, critical };
+    scheduler_ipc_service_id_t selected = 0U;
+    if (!scheduler_ipc_service_select_adaptive(candidates, 3U, &selected) ||
+        selected != critical) return false;
+    if (!scheduler_ipc_service_get_info(critical, &info) ||
+        info.arbitration_selections == 0U ||
+        info.arbitration_qos_adjustments == 0U ||
+        info.arbitration_last_score >= 2000U) return false;
+
+    if (scheduler_ipc_service_send_ex(source, predictive, 4U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    if (!scheduler_ipc_service_select_adaptive(candidates, 3U, &selected) ||
+        selected != critical ||
+        !scheduler_ipc_service_get_info(predictive, &info) ||
+        info.predictive_current_budget != 2U ||
+        info.arbitration_pressure_skips == 0U) return false;
+
+    if (!scheduler_ipc_service_set_qos_profile(critical,
+            SCHEDULER_IPC_QOS_NORMAL, 0U, 0U)) return false;
+    scheduler_ipc_service_id_t ties[2] = { normal, critical };
+    scheduler_ipc_service_id_t first = 0U, second = 0U;
+    if (!scheduler_ipc_service_select_adaptive(ties, 2U, &first) ||
+        !scheduler_ipc_service_select_adaptive(ties, 2U, &second) ||
+        first == second) return false;
+
+    scheduler_ipc_diagnostics_t diag = {0};
+    scheduler_ipc_get_diagnostics(&diag);
+    const bool telemetry = diag.arbitration_selections >= 4U &&
+        diag.arbitration_pressure_skips > 0U &&
+        diag.arbitration_qos_adjustments > 0U;
+    const bool cleanup = scheduler_ipc_service_unregister(critical) &&
+        scheduler_ipc_service_unregister(normal) &&
+        scheduler_ipc_service_unregister(predictive) &&
+        scheduler_ipc_service_unregister(source) &&
+        scheduler_ipc_service_count() == 0U;
+    return telemetry && cleanup;
+}
+
 bool scheduler_ipc_adaptive_load_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, low = 0U, high = 0U;
