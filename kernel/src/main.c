@@ -421,6 +421,11 @@ void kmain(void) {
         cpu_halt();
     }
     serial_write("HYBRID: IPC_WORKER_RUNTIME_SELFTEST_OK\n");
+    if (!scheduler_ipc_worker_pool_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_WORKER_POOL\n");
+        cpu_halt();
+    }
+    serial_write("HYBRID: IPC_WORKER_POOL_SELFTEST_OK\n");
     scheduler_ipc_diagnostics_t ipc_diagnostics = {0};
     scheduler_ipc_get_diagnostics(&ipc_diagnostics);
     if (ipc_diagnostics.pending_calls != 0U ||
