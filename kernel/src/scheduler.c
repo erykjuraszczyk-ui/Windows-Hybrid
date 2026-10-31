@@ -72,6 +72,9 @@ static uint64_t ipc_diag_arbitration_pressure_skips;
 static uint64_t ipc_diag_arbitration_qos_adjustments;
 static uint64_t ipc_diag_drr_credit_earned, ipc_diag_drr_credit_spent;
 static uint64_t ipc_diag_drr_starvation_protections, ipc_diag_drr_candidate_visits;
+static uint64_t ipc_diag_dispatch_grants, ipc_diag_dispatch_rejections;
+static uint64_t ipc_diag_dispatch_releases, ipc_diag_dispatch_scale_ups;
+static uint64_t ipc_diag_dispatch_scale_downs, ipc_diag_dispatch_selection_visits;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1183,6 +1186,16 @@ typedef struct {
     uint64_t arbitration_credit_earned;
     uint64_t arbitration_credit_spent;
     uint64_t arbitration_starvation_protections;
+    uint32_t dispatch_capacity_min;
+    uint32_t dispatch_capacity_max;
+    uint32_t dispatch_capacity_effective;
+    uint32_t dispatch_active;
+    uint32_t dispatch_last_load_percent;
+    uint64_t dispatch_grants;
+    uint64_t dispatch_rejections;
+    uint64_t dispatch_releases;
+    uint64_t dispatch_capacity_scale_ups;
+    uint64_t dispatch_capacity_scale_downs;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1289,7 +1302,8 @@ static scheduler_ipc_service_t *scheduler_ipc_find_service_locked(
 
 static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *service) {
     if (service == NULL || !service->active || !service->closing ||
-        service->active_calls != 0U || service->channel.readers.waiters != 0U ||
+        service->active_calls != 0U || service->dispatch_active != 0U ||
+        service->channel.readers.waiters != 0U ||
         service->channel.writers.waiters != 0U) return;
     service->active = false;
     service->closing = false;
@@ -1325,6 +1339,16 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->arbitration_credit_earned = 0U;
     service->arbitration_credit_spent = 0U;
     service->arbitration_starvation_protections = 0U;
+    service->dispatch_capacity_min = 1U;
+    service->dispatch_capacity_max = 1U;
+    service->dispatch_capacity_effective = 1U;
+    service->dispatch_active = 0U;
+    service->dispatch_last_load_percent = 0U;
+    service->dispatch_grants = 0U;
+    service->dispatch_rejections = 0U;
+    service->dispatch_releases = 0U;
+    service->dispatch_capacity_scale_ups = 0U;
+    service->dispatch_capacity_scale_downs = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         service->predictive_samples[sample] = 0U;
     service->messages_enqueued = 0U;
@@ -1439,7 +1463,8 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
             scheduler_irq_restore(flags);
             return false;
         }
-        if (!service->active && service->active_calls == 0U && free_slot == NULL)
+        if (!service->active && service->active_calls == 0U &&
+            service->dispatch_active == 0U && free_slot == NULL)
             free_slot = service;
     }
     if (free_slot == NULL || next_ipc_service_id == 0U) {
@@ -1480,6 +1505,16 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->arbitration_credit_earned = 0U;
     free_slot->arbitration_credit_spent = 0U;
     free_slot->arbitration_starvation_protections = 0U;
+    free_slot->dispatch_capacity_min = 1U;
+    free_slot->dispatch_capacity_max = 1U;
+    free_slot->dispatch_capacity_effective = 1U;
+    free_slot->dispatch_active = 0U;
+    free_slot->dispatch_last_load_percent = 0U;
+    free_slot->dispatch_grants = 0U;
+    free_slot->dispatch_rejections = 0U;
+    free_slot->dispatch_releases = 0U;
+    free_slot->dispatch_capacity_scale_ups = 0U;
+    free_slot->dispatch_capacity_scale_downs = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         free_slot->predictive_samples[sample] = 0U;
     free_slot->priority = 1U;
@@ -1587,6 +1622,16 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->arbitration_credit_earned = service->arbitration_credit_earned;
     info->arbitration_credit_spent = service->arbitration_credit_spent;
     info->arbitration_starvation_protections = service->arbitration_starvation_protections;
+    info->dispatch_capacity_min = service->dispatch_capacity_min;
+    info->dispatch_capacity_max = service->dispatch_capacity_max;
+    info->dispatch_capacity_effective = service->dispatch_capacity_effective;
+    info->dispatch_active = service->dispatch_active;
+    info->dispatch_last_load_percent = service->dispatch_last_load_percent;
+    info->dispatch_grants = service->dispatch_grants;
+    info->dispatch_rejections = service->dispatch_rejections;
+    info->dispatch_releases = service->dispatch_releases;
+    info->dispatch_capacity_scale_ups = service->dispatch_capacity_scale_ups;
+    info->dispatch_capacity_scale_downs = service->dispatch_capacity_scale_downs;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1832,6 +1877,135 @@ bool scheduler_ipc_service_set_adaptive_admission(scheduler_ipc_service_id_t ser
     service->congestion_high_watermark = max_high_watermark;
     service->congestion_low_watermark = max_high_watermark - 1U;
     service->congested = service->channel.count >= service->congestion_high_watermark;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_service_set_dispatch_capacity(scheduler_ipc_service_id_t service_id,
+                                                  uint32_t min_slots, uint32_t max_slots) {
+    if (min_slots == 0U || min_slots > max_slots ||
+        max_slots > SCHEDULER_IPC_DISPATCH_CAPACITY_MAX) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->closing || service->dispatch_active > max_slots) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    service->dispatch_capacity_min = min_slots;
+    service->dispatch_capacity_max = max_slots;
+    if (service->dispatch_capacity_effective < min_slots)
+        service->dispatch_capacity_effective = min_slots;
+    if (service->dispatch_capacity_effective > max_slots)
+        service->dispatch_capacity_effective = max_slots;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+static void scheduler_ipc_dispatch_rebalance_locked(scheduler_ipc_service_t *service) {
+    if (service == NULL || service->dispatch_capacity_min == 0U ||
+        service->dispatch_capacity_max < service->dispatch_capacity_min) return;
+    const uint32_t depth = service->channel.count;
+    if (depth >= ((SCHEDULER_IPC_CAPACITY * 3U + 3U) / 4U) &&
+        service->dispatch_capacity_effective < service->dispatch_capacity_max) {
+        ++service->dispatch_capacity_effective;
+        ++service->dispatch_capacity_scale_ups;
+        ++ipc_diag_dispatch_scale_ups;
+    } else if (depth <= (SCHEDULER_IPC_CAPACITY / 4U) &&
+               service->dispatch_active == 0U &&
+               service->dispatch_capacity_effective > service->dispatch_capacity_min) {
+        --service->dispatch_capacity_effective;
+        ++service->dispatch_capacity_scale_downs;
+        ++ipc_diag_dispatch_scale_downs;
+    }
+}
+
+bool scheduler_ipc_service_dispatch_acquire(const scheduler_ipc_service_id_t *candidates,
+                                             uint32_t candidate_count,
+                                             scheduler_ipc_service_id_t *selected_service_id) {
+    if (candidates == NULL || selected_service_id == NULL || candidate_count == 0U ||
+        candidate_count > SCHEDULER_IPC_MAX_SERVICES) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    static uint32_t dispatch_tie_cursor;
+    bool found = false;
+    uint64_t best_load = UINT64_MAX;
+    scheduler_ipc_service_id_t best_id = 0U;
+    for (uint32_t n = 0U; n < candidate_count; ++n) {
+        const uint32_t index = (dispatch_tie_cursor + n) % candidate_count;
+        scheduler_ipc_service_t *service =
+            scheduler_ipc_find_service_locked(candidates[index]);
+        if (service == NULL || service->closing) continue;
+        ++ipc_diag_dispatch_selection_visits;
+        scheduler_ipc_dispatch_rebalance_locked(service);
+        if (service->circuit_state == SCHEDULER_IPC_CIRCUIT_OPEN ||
+            service->congested ||
+            (service->predictive_admission_enabled &&
+             (service->predictive_current_budget == 0U ||
+              service->channel.count >= service->predictive_current_budget))) {
+            ++service->dispatch_rejections;
+            ++ipc_diag_dispatch_rejections;
+            continue;
+        }
+        if (service->dispatch_active >= service->dispatch_capacity_effective) {
+            ++service->dispatch_rejections;
+            ++ipc_diag_dispatch_rejections;
+            continue;
+        }
+        const uint64_t queue_load =
+            ((uint64_t)service->channel.count * UINT64_C(100)) /
+            (uint64_t)SCHEDULER_IPC_CAPACITY;
+        const uint64_t worker_load =
+            ((uint64_t)service->dispatch_active * UINT64_C(100)) /
+            (uint64_t)service->dispatch_capacity_effective;
+        const uint64_t load = (queue_load + worker_load) / 2U;
+        service->dispatch_last_load_percent = load > 100U ? 100U : (uint32_t)load;
+        if (!found || load < best_load) {
+            found = true;
+            best_load = load;
+            best_id = service->id;
+        }
+    }
+    if (found) {
+        scheduler_ipc_service_t *selected = scheduler_ipc_find_service_locked(best_id);
+        if (selected != NULL &&
+            selected->dispatch_active < selected->dispatch_capacity_effective) {
+            ++selected->dispatch_active;
+            ++selected->dispatch_grants;
+            ++ipc_diag_dispatch_grants;
+            *selected_service_id = best_id;
+            for (uint32_t i = 0U; i < candidate_count; ++i) {
+                if (candidates[i] == best_id) {
+                    dispatch_tie_cursor = (i + 1U) % candidate_count;
+                    break;
+                }
+            }
+        } else {
+            found = false;
+        }
+    }
+    scheduler_irq_restore(flags);
+    return found;
+}
+
+bool scheduler_ipc_service_dispatch_release(scheduler_ipc_service_id_t service_id,
+                                             bool successful) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(service_id);
+    if (service == NULL || service->dispatch_active == 0U) {
+        if (service != NULL) {
+            ++service->dispatch_rejections;
+            ++ipc_diag_dispatch_rejections;
+        }
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    --service->dispatch_active;
+    ++service->dispatch_releases;
+    ++ipc_diag_dispatch_releases;
+    if (successful) {
+        service->health_state = SCHEDULER_IPC_HEALTHY;
+        service->consecutive_failures = 0U;
+    }
+    scheduler_ipc_service_finalize_locked(service);
     scheduler_irq_restore(flags);
     return true;
 }
@@ -3123,6 +3297,82 @@ bool scheduler_ipc_qos_arbitration_self_test(void) {
 }
 
 
+bool scheduler_ipc_capacity_dispatch_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, busy = 0U, spare = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("cap.source", caps, &source) ||
+        !scheduler_ipc_service_register_ex("cap.busy", caps, &busy) ||
+        !scheduler_ipc_service_register_ex("cap.spare", caps, &spare)) return false;
+    if (!scheduler_ipc_service_set_dispatch_capacity(busy, 1U, 3U) ||
+        !scheduler_ipc_service_set_dispatch_capacity(spare, 1U, 2U) ||
+        scheduler_ipc_service_set_dispatch_capacity(spare, 0U, 2U) ||
+        scheduler_ipc_service_set_dispatch_capacity(spare, 2U, 1U) ||
+        scheduler_ipc_service_set_dispatch_capacity(spare, 1U,
+            SCHEDULER_IPC_DISPATCH_CAPACITY_MAX + 1U)) return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x43415031);
+    message.length = 1U;
+    for (uint32_t i = 0U; i < 3U; ++i) {
+        message.payload[0] = (uint8_t)i;
+        if (scheduler_ipc_service_send_ex(source, busy, i + 1U, &message) !=
+            SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    }
+
+    scheduler_ipc_service_id_t selected = 0U;
+    const scheduler_ipc_service_id_t busy_only[1] = { busy };
+    if (!scheduler_ipc_service_dispatch_acquire(busy_only, 1U, &selected) ||
+        selected != busy ||
+        !scheduler_ipc_service_dispatch_acquire(busy_only, 1U, &selected) ||
+        selected != busy ||
+        !scheduler_ipc_service_dispatch_acquire(busy_only, 1U, &selected) ||
+        selected != busy ||
+        scheduler_ipc_service_dispatch_acquire(busy_only, 1U, &selected))
+        return false;
+
+    const scheduler_ipc_service_id_t both[2] = { busy, spare };
+    if (!scheduler_ipc_service_dispatch_acquire(both, 2U, &selected) ||
+        selected != spare) return false;
+    if (!scheduler_ipc_service_dispatch_release(busy, true) ||
+        !scheduler_ipc_service_dispatch_release(busy, true) ||
+        !scheduler_ipc_service_dispatch_release(busy, true) ||
+        !scheduler_ipc_service_dispatch_release(spare, true) ||
+        scheduler_ipc_service_dispatch_release(busy, true)) return false;
+
+    scheduler_ipc_message_t received = {0};
+    for (uint32_t i = 0U; i < 3U; ++i)
+        if (!scheduler_ipc_service_receive(busy, &received)) return false;
+    for (uint32_t i = 0U; i < 2U; ++i) {
+        if (!scheduler_ipc_service_dispatch_acquire(busy_only, 1U, &selected) ||
+            selected != busy ||
+            !scheduler_ipc_service_dispatch_release(busy, true)) return false;
+    }
+
+    scheduler_ipc_service_info_t busy_info = {0}, spare_info = {0};
+    scheduler_ipc_diagnostics_t diagnostics = {0};
+    if (!scheduler_ipc_service_get_info(busy, &busy_info) ||
+        !scheduler_ipc_service_get_info(spare, &spare_info)) return false;
+    scheduler_ipc_get_diagnostics(&diagnostics);
+    const bool model_ok = busy_info.dispatch_capacity_min == 1U &&
+        busy_info.dispatch_capacity_max == 3U &&
+        busy_info.dispatch_capacity_effective == 1U &&
+        busy_info.dispatch_active == 0U &&
+        busy_info.dispatch_capacity_scale_ups >= 2U &&
+        busy_info.dispatch_capacity_scale_downs >= 2U;
+    const bool telemetry_ok = diagnostics.dispatch_grants == 6U &&
+        diagnostics.dispatch_releases == 6U &&
+        diagnostics.dispatch_rejections >= 2U &&
+        diagnostics.dispatch_capacity_scale_ups >= 2U &&
+        diagnostics.dispatch_capacity_scale_downs >= 2U &&
+        diagnostics.dispatch_selection_visits >= 7U;
+    const bool cleanup = scheduler_ipc_service_unregister(spare) &&
+        scheduler_ipc_service_unregister(busy) &&
+        scheduler_ipc_service_unregister(source) &&
+        scheduler_ipc_service_count() == 0U;
+    return model_ok && telemetry_ok && cleanup;
+}
+
 bool scheduler_ipc_drr_fair_admission_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, best_effort = 0U, normal = 0U, critical = 0U;
@@ -4061,6 +4311,12 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->drr_credit_spent = ipc_diag_drr_credit_spent;
     diagnostics->drr_starvation_protections = ipc_diag_drr_starvation_protections;
     diagnostics->drr_candidate_visits = ipc_diag_drr_candidate_visits;
+    diagnostics->dispatch_grants = ipc_diag_dispatch_grants;
+    diagnostics->dispatch_rejections = ipc_diag_dispatch_rejections;
+    diagnostics->dispatch_releases = ipc_diag_dispatch_releases;
+    diagnostics->dispatch_capacity_scale_ups = ipc_diag_dispatch_scale_ups;
+    diagnostics->dispatch_capacity_scale_downs = ipc_diag_dispatch_scale_downs;
+    diagnostics->dispatch_selection_visits = ipc_diag_dispatch_selection_visits;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;

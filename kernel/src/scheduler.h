@@ -21,6 +21,7 @@ typedef enum {
 #define SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW 4U
 #define SCHEDULER_IPC_DRR_CREDIT_MAX 32U
 #define SCHEDULER_IPC_DRR_STARVATION_ROUNDS 4U
+#define SCHEDULER_IPC_DISPATCH_CAPACITY_MAX 4U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
@@ -174,6 +175,16 @@ typedef struct {
     uint64_t arbitration_credit_earned;
     uint64_t arbitration_credit_spent;
     uint64_t arbitration_starvation_protections;
+    uint32_t dispatch_capacity_min;
+    uint32_t dispatch_capacity_max;
+    uint32_t dispatch_capacity_effective;
+    uint32_t dispatch_active;
+    uint32_t dispatch_last_load_percent;
+    uint64_t dispatch_grants;
+    uint64_t dispatch_rejections;
+    uint64_t dispatch_releases;
+    uint64_t dispatch_capacity_scale_ups;
+    uint64_t dispatch_capacity_scale_downs;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -264,6 +275,12 @@ typedef struct {
     uint64_t drr_credit_spent;
     uint64_t drr_starvation_protections;
     uint64_t drr_candidate_visits;
+    uint64_t dispatch_grants;
+    uint64_t dispatch_rejections;
+    uint64_t dispatch_releases;
+    uint64_t dispatch_capacity_scale_ups;
+    uint64_t dispatch_capacity_scale_downs;
+    uint64_t dispatch_selection_visits;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -387,6 +404,14 @@ bool scheduler_ipc_service_set_predictive_admission(scheduler_ipc_service_id_t s
 bool scheduler_ipc_predictive_pressure_self_test(void);
 bool scheduler_ipc_qos_arbitration_self_test(void);
 bool scheduler_ipc_drr_fair_admission_self_test(void);
+bool scheduler_ipc_service_set_dispatch_capacity(scheduler_ipc_service_id_t service_id,
+                                                  uint32_t min_slots, uint32_t max_slots);
+bool scheduler_ipc_service_dispatch_acquire(const scheduler_ipc_service_id_t *candidates,
+                                             uint32_t candidate_count,
+                                             scheduler_ipc_service_id_t *selected_service_id);
+bool scheduler_ipc_service_dispatch_release(scheduler_ipc_service_id_t service_id,
+                                             bool successful);
+bool scheduler_ipc_capacity_dispatch_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
