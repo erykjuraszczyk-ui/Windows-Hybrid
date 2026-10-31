@@ -56,4 +56,4 @@ Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
 | v0.22.0 | IPC Message Expiration, TTL i usuwanie przeterminowanych wiadomości (CI PASS) |
 | v0.23.0 | IPC Queue Compaction, Capacity Telemetry i Backpressure Recovery (CI PASS na gałęzi funkcji) |
 | v0.24.0 | IPC Dynamic Admission Control & Adaptive Queue Pressure Management (implementacja; CI pending) |\n| v0.25.0 | IPC Predictive Queue Pressure & Admission Budgeting (CI PASS na gałęzi funkcji) |\n| v0.26.0 | IPC Congestion-Aware Scheduling & QoS Arbitration (CI PASS na gałęzi funkcji) |
-| v0.27.0 | IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits (implementacja; CI pending) |
+| v0.27.0 | IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits (CI PASS na gałęzi funkcji) |
