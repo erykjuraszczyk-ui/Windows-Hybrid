@@ -5970,6 +5970,8 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     if (scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
         SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
 
+    if (!scheduler_ipc_service_set_dispatch_capacity(destination, 2U, 2U))
+        return false;
     scheduler_ipc_worker_pool_test_context_t context = {0};
     const scheduler_ipc_worker_id_t first_id = ipc_next_worker_id;
     if (!scheduler_ipc_worker_pool_set_size(destination, 2U,
