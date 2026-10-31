@@ -3125,9 +3125,10 @@ bool scheduler_ipc_qos_arbitration_self_test(void) {
 
 bool scheduler_ipc_drr_fair_admission_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
-    scheduler_ipc_service_id_t best_effort = 0U, normal = 0U, critical = 0U;
+    scheduler_ipc_service_id_t source = 0U, best_effort = 0U, normal = 0U, critical = 0U;
     const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
-    if (!scheduler_ipc_service_register_ex("drr.best", caps, &best_effort) ||
+    if (!scheduler_ipc_service_register_ex("drr.source", caps, &source) ||
+        !scheduler_ipc_service_register_ex("drr.best", caps, &best_effort) ||
         !scheduler_ipc_service_register_ex("drr.norm", caps, &normal) ||
         !scheduler_ipc_service_register_ex("drr.crit", caps, &critical)) return false;
     if (!scheduler_ipc_service_set_qos_profile(best_effort,
@@ -3136,6 +3137,15 @@ bool scheduler_ipc_drr_fair_admission_self_test(void) {
             SCHEDULER_IPC_QOS_NORMAL, 0U, 0U) ||
         !scheduler_ipc_service_set_qos_profile(critical,
             SCHEDULER_IPC_QOS_DEADLINE_CRITICAL, 8U, 0U)) return false;
+
+    /* Keep BEST_EFFORT eligible but less attractive, so aging must rescue it. */
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x44525231);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0xA5);
+    if (scheduler_ipc_service_send_ex(source, best_effort, 1U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+
     const scheduler_ipc_service_id_t candidates[3] = {
         best_effort, normal, critical
     };
@@ -3165,6 +3175,7 @@ bool scheduler_ipc_drr_fair_admission_self_test(void) {
     const bool cleanup = scheduler_ipc_service_unregister(critical) &&
         scheduler_ipc_service_unregister(normal) &&
         scheduler_ipc_service_unregister(best_effort) &&
+        scheduler_ipc_service_unregister(source) &&
         scheduler_ipc_service_count() == 0U;
     return bounded && fairness && accounting && cleanup;
 }
