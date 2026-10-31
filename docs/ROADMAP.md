@@ -33,7 +33,7 @@
 | v0.17.0 | Adaptacyjne równoważenie IPC po głębokości kolejki i priorytecie, progi przeciążenia high/low watermark oraz test QEMU; CI pending |
 | v0.25.0 | Predykcja trendu presji kolejki i ograniczone budżety admission; CI PASS na gałęzi funkcji |
 | v0.26.0 | Arbitraż IPC uwzględniający congestion, priorytet, profil QoS i budżet predykcyjny; CI PASS na gałęzi funkcji |
-| v0.27.0 | Deficit Round Robin, ważone kredyty admission, aging i ochrona przed zagłodzeniem usług IPC; walidacja QEMU w toku |
+| v0.27.0 | Deficit Round Robin, ważone kredyty admission, aging i ochrona przed zagłodzeniem usług IPC; CI PASS na gałęzi funkcji ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180355402)) |
 | v1.0.0–v1.4.0 | Dojrzewanie podstaw systemu i wejścia/pulpitu; szczegóły wymagają weryfikacji historycznych materiałów |
 | v1.5.0 | Surface API i Desktop Services |
 | v1.6.0 | Pamięć współdzielona i dwa bufory |
