@@ -347,3 +347,16 @@ Dodano telemetrię per usługa i globalną: kredyty zdobyte/zużyte, wizyty kand
 - Marker QEMU: `HYBRID: IPC_WORKER_RUNTIME_SELFTEST_OK`.
 
 **Granice:** jednordzeniowy Ring 0, kooperatywne zadania step-based i synchroniczny callback. Brak SMP, workerów Ring 3, izolacji procesów i twardych gwarancji czasu rzeczywistego. Recovery nie przerywa siłowo callbacku aktualnie wykonywanego na CPU.
+
+
+## HYBRID OS v0.30.0 — IPC Worker Pool Scaling, Cooperative Dispatch & Fault Isolation
+
+**Status: implementacja na gałęzi funkcji; oczekuje na CI/QEMU.**
+
+- `scheduler_ipc_worker_pool_set_size()` steruje liczbą workerów przypisanych do usługi w granicach stałej puli.
+- Skalowanie w górę tworzy kolejne zadania kooperatywne; skalowanie w dół oznacza kontrolowane przejście wybranych workerów do STOPPING.
+- `scheduler_ipc_worker_pool_get_info()` udostępnia liczbę workerów w stanach IDLE/READY/RUNNING/STOPPING/FAILED, maksimum obserwowane i liczniki skalowania/awarii.
+- Wyczerpanie retry izoluje worker: jego task kończy się jako FAILED/EXITED, a pozostałe workery nie są automatycznie zatrzymywane.
+- QEMU marker: `HYBRID: IPC_WORKER_POOL_SELFTEST_OK`.
+
+**Granice:** „parallel” oznacza współbieżny postęp zadań w schedulerze kooperatywnym na jednym CPU. Brak jednoczesnego wykonywania SMP, preempcji handlera, Ring 3 i izolacji pamięci między workerami. Wszystkie callbacki nadal wykonują się w Ring 0.

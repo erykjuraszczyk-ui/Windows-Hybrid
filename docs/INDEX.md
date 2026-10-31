@@ -19,6 +19,7 @@
 - [HYBRID OS v0.26.0](BOOTSTRAP_v0.26.0.md) — arbitraż QoS, priorytetów i predykcyjnego przeciążenia.
 - [HYBRID OS v0.27.0](BOOTSTRAP_v0.27.0.md) — DRR, kredyty admission i ochrona przed zagłodzeniem.
 - [HYBRID OS v0.29.0](BOOTSTRAP_v0.29.0.md) — runtime workerów IPC, lifecycle i lease recovery.
+- [HYBRID OS v0.30.0](BOOTSTRAP_v0.30.0.md) — skalowanie puli workerów, współbieżny dispatch i izolacja awarii.
 - [HYBRID OS v0.18.0](BOOTSTRAP_v0.18.0.md) — bounded IPC event trace i runtime observability.
 - [HYBRID OS v0.19.0](BOOTSTRAP_v0.19.0.md) — token-bucket rate limiting i admission control.
 - [ROADMAP.md](ROADMAP.md) — wersje oraz zależności pomiędzy etapami.
@@ -63,3 +64,5 @@ Każda funkcja wymaga kodu, testów i wyników przed oznaczeniem jako gotowa.
 
 
 | v0.29.0 | IPC Worker Runtime, kooperatywne zadania workerów, lifecycle, ograniczone retry i lease recovery (CI pending) |
+
+| v0.30.0 | IPC Worker Pool Scaling, Cooperative Dispatch & Fault Isolation (CI pending) |

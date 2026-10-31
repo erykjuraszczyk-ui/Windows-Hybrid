@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.29.0 — IPC Worker Runtime, Worker Lifecycle & Lease Recovery; implementacja na gałęzi funkcji, walidacja CI w toku.
+**Aktualny etap:** v0.30.0 — IPC Worker Pool Scaling, Cooperative Parallel Dispatch & Fault Isolation; implementacja na gałęzi funkcji, walidacja CI w toku.
 
 ## Historia statusu
 
@@ -200,3 +200,12 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 - Pobieranie wiadomości, rezerwacja slotu dispatch i synchroniczny callback usługi.
 - Dzierżawy w tickach PIT, ograniczone ponowienia handlera i ścieżka odzyskiwania wygasłej dzierżawy.
 - Ograniczenie: jednordzeniowy Ring 0, callback synchroniczny, brak SMP, Ring 3 i gwarancji czasu rzeczywistego.
+
+
+## HYBRID OS v0.30.0 — IPC Worker Pool Scaling & Fault Isolation
+
+- Sterowanie rozmiarem puli workerów usługi IPC w granicach stałej pojemności.
+- Skalowanie w górę przez tworzenie dodatkowych zadań kooperatywnych i w dół przez kontrolowane zatrzymywanie workerów.
+- Telemetria puli: stany workerów, maksimum aktywnych, zdarzenia skalowania i izolowane awarie.
+- Błąd handlera wyczerpujący limit retry kończy wyłącznie zadanie danego workera; pozostałe workery usługi mogą kontynuować.
+- „Parallel dispatch” oznacza współbieżny postęp zadań w schedulerze kooperatywnym na jednym rdzeniu, nie jednoczesne wykonywanie na wielu CPU.

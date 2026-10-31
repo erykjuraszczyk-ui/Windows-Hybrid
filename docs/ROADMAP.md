@@ -81,3 +81,5 @@ Kolejny numer nie zamyka poprzedniego etapu automatycznie. Funkcja jest gotowa d
 | v0.28.0 | Model pojemności usług IPC, adaptacyjne sloty worker dispatch, znormalizowane load balancing i telemetria; CI PASS na gałęzi funkcji ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180895270)) |
 
 | v0.29.0 | IPC Worker Runtime: zadania workerów oparte na schedulerze, przetwarzanie wiadomości, lifecycle, ograniczone retry i lease recovery; CI pending |
+
+| v0.30.0 | Skalowanie puli workerów IPC, współbieżny postęp zadań kooperatywnych, telemetria i izolacja awarii pojedynczego workera; CI pending |
