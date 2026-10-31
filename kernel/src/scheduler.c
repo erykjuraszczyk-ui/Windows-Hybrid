@@ -5631,6 +5631,7 @@ static scheduler_step_result_t scheduler_ipc_worker_step(void *context) {
         worker->dispatch_reserved = false;
         worker->info.lease_active = false;
         worker->info.state = SCHEDULER_IPC_WORKER_FAILED;
+        ++ipc_worker_isolated_failures;
         return SCHEDULER_STEP_COMPLETE;
     }
     worker->info.state = SCHEDULER_IPC_WORKER_READY;
@@ -5836,4 +5837,179 @@ bool scheduler_ipc_worker_runtime_self_test(void) {
     const bool cleanup = scheduler_ipc_service_unregister(retry_source) &&
                          scheduler_ipc_service_unregister(retry_destination);
     return processed && retried && cleanup;
+}
+
+
+/* v0.30.0: bounded pool scaling and per-worker fault containment. */
+static uint64_t ipc_worker_isolated_failures = 0U;
+static uint64_t ipc_worker_pool_scale_up_events = 0U;
+static uint64_t ipc_worker_pool_scale_down_events = 0U;
+static uint32_t ipc_worker_pool_max_observed = 0U;
+
+bool scheduler_ipc_worker_pool_get_info(scheduler_ipc_service_id_t service_id,
+                                        scheduler_ipc_worker_pool_info_t *info) {
+    if (service_id == 0U || info == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (scheduler_ipc_find_service_locked(service_id) == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_ipc_worker_pool_info_t snapshot = {0};
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i) {
+        const scheduler_ipc_worker_info_t *worker = &ipc_workers[i].info;
+        if (worker->state == SCHEDULER_IPC_WORKER_UNUSED ||
+            worker->service_id != service_id) continue;
+        if (worker->state != SCHEDULER_IPC_WORKER_FAILED)
+            ++snapshot.active_workers;
+        switch (worker->state) {
+            case SCHEDULER_IPC_WORKER_IDLE: ++snapshot.idle_workers; break;
+            case SCHEDULER_IPC_WORKER_READY: ++snapshot.ready_workers; break;
+            case SCHEDULER_IPC_WORKER_RUNNING: ++snapshot.running_workers; break;
+            case SCHEDULER_IPC_WORKER_STOPPING: ++snapshot.stopping_workers; break;
+            case SCHEDULER_IPC_WORKER_FAILED: ++snapshot.failed_workers; break;
+            default: break;
+        }
+    }
+    if (snapshot.active_workers > ipc_worker_pool_max_observed)
+        ipc_worker_pool_max_observed = snapshot.active_workers;
+    snapshot.max_observed_workers = ipc_worker_pool_max_observed;
+    snapshot.isolated_worker_failures = ipc_worker_isolated_failures;
+    snapshot.pool_scale_up_events = ipc_worker_pool_scale_up_events;
+    snapshot.pool_scale_down_events = ipc_worker_pool_scale_down_events;
+    *info = snapshot;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_worker_pool_set_size(scheduler_ipc_service_id_t service_id,
+                                        uint32_t desired_workers,
+                                        scheduler_ipc_worker_handler_fn handler,
+                                        void *context,
+                                        uint64_t lease_timeout_ticks) {
+    if (service_id == 0U || desired_workers > SCHEDULER_IPC_WORKER_MAX ||
+        (desired_workers > 0U && (handler == NULL || lease_timeout_ticks == 0U)))
+        return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (scheduler_ipc_find_service_locked(service_id) == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_irq_restore(flags);
+
+    scheduler_ipc_worker_id_t ids[SCHEDULER_IPC_WORKER_MAX] = {0};
+    uint32_t active = 0U;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i) {
+        const scheduler_ipc_worker_info_t *worker = &ipc_workers[i].info;
+        if (worker->service_id == service_id &&
+            worker->state != SCHEDULER_IPC_WORKER_UNUSED &&
+            worker->state != SCHEDULER_IPC_WORKER_FAILED &&
+            worker->state != SCHEDULER_IPC_WORKER_STOPPING) {
+            ids[active++] = worker->worker_id;
+        }
+    }
+
+    if (active < desired_workers) {
+        for (uint32_t i = active; i < desired_workers; ++i) {
+            scheduler_ipc_worker_id_t created = 0U;
+            if (!scheduler_ipc_worker_start(service_id, handler, context,
+                                            lease_timeout_ticks, &created))
+                return false;
+        }
+        const uint64_t update_flags = scheduler_irq_save_disable();
+        ++ipc_worker_pool_scale_up_events;
+        scheduler_irq_restore(update_flags);
+    } else if (active > desired_workers) {
+        for (uint32_t i = desired_workers; i < active; ++i) {
+            if (!scheduler_ipc_worker_stop(ids[i])) return false;
+        }
+        const uint64_t update_flags = scheduler_irq_save_disable();
+        ++ipc_worker_pool_scale_down_events;
+        scheduler_irq_restore(update_flags);
+    }
+    return true;
+}
+
+typedef struct {
+    uint32_t failing_calls;
+    uint32_t healthy_calls;
+} scheduler_ipc_worker_pool_test_context_t;
+
+static bool scheduler_ipc_worker_pool_test_handler(
+    scheduler_ipc_service_id_t service_id,
+    const scheduler_ipc_message_t *message, void *context) {
+    (void)service_id;
+    if (message == NULL || context == NULL || message->length == 0U) return false;
+    scheduler_ipc_worker_pool_test_context_t *state =
+        (scheduler_ipc_worker_pool_test_context_t *)context;
+    if (message->payload[0] == 0xB0U) {
+        ++state->failing_calls;
+        return false;
+    }
+    if (message->payload[0] == 0xB1U) {
+        ++state->healthy_calls;
+        return true;
+    }
+    return false;
+}
+
+bool scheduler_ipc_worker_pool_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    if (!scheduler_ipc_service_register_ex("pool.src",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &source) ||
+        !scheduler_ipc_service_register_ex("pool.dst",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &destination)) return false;
+
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x57504C31);
+    message.length = 1U;
+    message.payload[0] = 0xB0U;
+    if (scheduler_ipc_service_send_ex(source, destination, 1U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+    message.payload[0] = 0xB1U;
+    if (scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+
+    scheduler_ipc_worker_pool_test_context_t context = {0};
+    const scheduler_ipc_worker_id_t first_id = ipc_next_worker_id;
+    if (!scheduler_ipc_worker_pool_set_size(destination, 2U,
+            scheduler_ipc_worker_pool_test_handler, &context, 1U)) return false;
+    const scheduler_ipc_worker_id_t second_id = first_id + 1U;
+
+    if (!scheduler_run_once() || !scheduler_run_once()) return false;
+    scheduler_ipc_worker_info_t first = {0}, second = {0};
+    if (!scheduler_ipc_worker_get_info(first_id, &first) ||
+        !scheduler_ipc_worker_get_info(second_id, &second) ||
+        first.handler_failures != 1U || second.messages_processed != 1U ||
+        context.failing_calls != 1U || context.healthy_calls != 1U) return false;
+
+    /* Expire only the failing worker's lease; the healthy worker remains usable. */
+    for (uint32_t attempt = 0U; attempt < 2U; ++attempt) {
+        const uint64_t expire_flags = scheduler_irq_save_disable();
+        scheduler_ipc_worker_t *failing = scheduler_ipc_worker_find_locked(first_id);
+        if (failing == NULL) {
+            scheduler_irq_restore(expire_flags);
+            return false;
+        }
+        failing->info.lease_deadline_tick = 0U;
+        scheduler_irq_restore(expire_flags);
+        if (!scheduler_run_once() || !scheduler_run_once()) return false;
+    }
+
+    scheduler_ipc_worker_pool_info_t pool = {0};
+    const bool isolated = scheduler_ipc_worker_get_info(first_id, &first) &&
+        scheduler_ipc_worker_get_info(second_id, &second) &&
+        first.state == SCHEDULER_IPC_WORKER_FAILED &&
+        second.messages_processed == 1U &&
+        scheduler_ipc_worker_pool_get_info(destination, &pool) &&
+        pool.failed_workers == 1U && pool.active_workers == 1U &&
+        pool.isolated_worker_failures >= 1U &&
+        pool.max_observed_workers >= 2U && pool.pool_scale_up_events >= 1U;
+
+    if (!scheduler_ipc_worker_stop(second_id) || !scheduler_run_once()) return false;
+    (void)scheduler_ipc_worker_maintenance();
+    (void)scheduler_ipc_worker_maintenance();
+    const bool cleanup = scheduler_ipc_service_unregister(source) &&
+                         scheduler_ipc_service_unregister(destination);
+    return isolated && cleanup;
 }
