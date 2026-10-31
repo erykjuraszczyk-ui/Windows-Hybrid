@@ -6039,6 +6039,21 @@ bool scheduler_ipc_worker_pool_self_test(void) {
         pool.failed_workers == 1U && pool.active_workers == 1U &&
         pool.isolated_worker_failures >= 1U &&
         pool.max_observed_workers >= 2U && pool.pool_scale_up_events >= 1U;
+    serial_write("POOL_STATS state=");
+    serial_write_hex64(failing->info.state);
+    serial_write(" processed=");
+    serial_write_hex64(healthy->info.messages_processed);
+    serial_write(" active=");
+    serial_write_hex64(pool.active_workers);
+    serial_write(" failed=");
+    serial_write_hex64(pool.failed_workers);
+    serial_write(" isolated=");
+    serial_write_hex64(pool.isolated_worker_failures);
+    serial_write(" max=");
+    serial_write_hex64(pool.max_observed_workers);
+    serial_write(" scale=");
+    serial_write_hex64(pool.pool_scale_up_events);
+    serial_write("\\n");
 
     serial_write("POOL_F\\n");
     const scheduler_ipc_worker_id_t failing_id = failing->info.worker_id;
@@ -6046,7 +6061,17 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     const bool failing_reaped = scheduler_ipc_worker_test_stop_and_reap(failing_id);
     const bool healthy_reaped = scheduler_ipc_worker_test_stop_and_reap(healthy_id);
     serial_write("POOL_G\\n");
-    const bool cleanup = scheduler_ipc_service_unregister(source) &&
-                         scheduler_ipc_service_unregister(destination);
-    return isolated && failing_reaped && healthy_reaped && cleanup;
+    const bool source_closed = scheduler_ipc_service_unregister(source);
+    const bool destination_closed = scheduler_ipc_service_unregister(destination);
+    serial_write("POOL_CLEANUP=");
+    serial_write_hex64(source_closed);
+    serial_write(",");
+    serial_write_hex64(destination_closed);
+    serial_write(" reaped=");
+    serial_write_hex64(failing_reaped);
+    serial_write(",");
+    serial_write_hex64(healthy_reaped);
+    serial_write("\\n");
+    return isolated && failing_reaped && healthy_reaped &&
+           source_closed && destination_closed;
 }
