@@ -5549,6 +5549,10 @@ typedef struct {
 
 static scheduler_ipc_worker_t ipc_workers[SCHEDULER_IPC_WORKER_MAX];
 static scheduler_ipc_worker_id_t ipc_next_worker_id = 1U;
+static uint64_t ipc_worker_isolated_failures = 0U;
+static uint64_t ipc_worker_pool_scale_up_events = 0U;
+static uint64_t ipc_worker_pool_scale_down_events = 0U;
+static uint32_t ipc_worker_pool_max_observed = 0U;
 
 static scheduler_ipc_worker_t *scheduler_ipc_worker_find_locked(
     scheduler_ipc_worker_id_t worker_id) {
@@ -5841,10 +5845,6 @@ bool scheduler_ipc_worker_runtime_self_test(void) {
 
 
 /* v0.30.0: bounded pool scaling and per-worker fault containment. */
-static uint64_t ipc_worker_isolated_failures = 0U;
-static uint64_t ipc_worker_pool_scale_up_events = 0U;
-static uint64_t ipc_worker_pool_scale_down_events = 0U;
-static uint32_t ipc_worker_pool_max_observed = 0U;
 
 bool scheduler_ipc_worker_pool_get_info(scheduler_ipc_service_id_t service_id,
                                         scheduler_ipc_worker_pool_info_t *info) {
