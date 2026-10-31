@@ -5987,7 +5987,22 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     if (!scheduler_ipc_worker_get_info(first_id, &first) ||
         !scheduler_ipc_worker_get_info(second_id, &second) ||
         first.handler_failures != 1U || second.messages_processed != 1U ||
-        context.failing_calls != 1U || context.healthy_calls != 1U) return false;
+        context.failing_calls != 1U || context.healthy_calls != 1U) {
+        serial_write("POOL_DIAG first_fail=");
+        serial_write_hex64(first.handler_failures);
+        serial_write(" second_done=");
+        serial_write_hex64(second.messages_processed);
+        serial_write(" bad_calls=");
+        serial_write_hex64(context.failing_calls);
+        serial_write(" good_calls=");
+        serial_write_hex64(context.healthy_calls);
+        serial_write(" first_state=");
+        serial_write_hex64(first.state);
+        serial_write(" second_state=");
+        serial_write_hex64(second.state);
+        serial_write("\\n");
+        return false;
+    }
 
     serial_write("POOL_TEST_E\\n");
     /* Expire only the failing worker's lease; the healthy worker remains usable. */
