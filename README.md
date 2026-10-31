@@ -1,7 +1,7 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.27.0 — IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits; walidacja CI w toku.
+**Aktualny etap:** v0.29.0 — IPC Worker Runtime, Worker Lifecycle & Lease Recovery; implementacja na gałęzi funkcji, walidacja CI w toku.
 
 ## Historia statusu
 
@@ -191,3 +191,12 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 **Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41180895270](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180895270) potwierdził kompilację, `IPC_CAPACITY_DISPATCH_SELFTEST_OK` i `BOOT_OK`. Dodano model pojemności dispatch per usługa (1–4 logiczne sloty), adaptacyjne skalowanie w górę przy wysokim obciążeniu kolejki i w dół po jej opróżnieniu oraz atomowy acquire/release slotu. Selektor równoważy usługi na podstawie znormalizowanego obciążenia kolejki i aktywnych rezerwacji. Szczegóły: [specyfikacja v0.28.0](docs/BOOTSTRAP_v0.28.0.md).
 
 **Ograniczenia:** sloty są logicznym limitem admission, nie tworzą wątków ani zadań CPU. Rzeczywisty worker runtime jest osobnym etapem. Brak dynamicznej alokacji i SMP safety.
+
+
+## HYBRID OS v0.29.0 — IPC Worker Runtime
+
+- Stała pula workerów IPC, powiązanych z rzeczywistymi zadaniami kooperatywnego Scheduler Core.
+- Deskryptory workerów, stany READY/IDLE/RUNNING/STOPPING/FAILED i identyfikatory tasków.
+- Pobieranie wiadomości, rezerwacja slotu dispatch i synchroniczny callback usługi.
+- Dzierżawy w tickach PIT, ograniczone ponowienia handlera i ścieżka odzyskiwania wygasłej dzierżawy.
+- Ograniczenie: jednordzeniowy Ring 0, callback synchroniczny, brak SMP, Ring 3 i gwarancji czasu rzeczywistego.
