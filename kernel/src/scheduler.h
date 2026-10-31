@@ -22,6 +22,8 @@ typedef enum {
 #define SCHEDULER_IPC_DRR_CREDIT_MAX 32U
 #define SCHEDULER_IPC_DRR_STARVATION_ROUNDS 4U
 #define SCHEDULER_IPC_DISPATCH_CAPACITY_MAX 4U
+#define SCHEDULER_IPC_WORKER_MAX 4U
+#define SCHEDULER_IPC_WORKER_RETRY_MAX 3U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
@@ -412,6 +414,15 @@ bool scheduler_ipc_service_dispatch_acquire(const scheduler_ipc_service_id_t *ca
 bool scheduler_ipc_service_dispatch_release(scheduler_ipc_service_id_t service_id,
                                              bool successful);
 bool scheduler_ipc_capacity_dispatch_self_test(void);
+typedef uint32_t scheduler_ipc_worker_id_t;
+typedef enum { SCHEDULER_IPC_WORKER_UNUSED=0U, SCHEDULER_IPC_WORKER_IDLE=1U, SCHEDULER_IPC_WORKER_READY=2U, SCHEDULER_IPC_WORKER_RUNNING=3U, SCHEDULER_IPC_WORKER_STOPPING=4U, SCHEDULER_IPC_WORKER_FAILED=5U } scheduler_ipc_worker_state_t;
+typedef bool (*scheduler_ipc_worker_handler_fn)(scheduler_ipc_service_id_t, const scheduler_ipc_message_t *, void *);
+typedef struct { scheduler_ipc_worker_id_t worker_id; scheduler_ipc_service_id_t service_id; scheduler_task_id_t task_id; scheduler_ipc_worker_state_t state; bool lease_active; uint64_t lease_deadline_tick; uint32_t lease_generation; uint32_t retry_count; uint64_t messages_processed; uint64_t handler_failures; uint64_t lease_recoveries; } scheduler_ipc_worker_info_t;
+bool scheduler_ipc_worker_start(scheduler_ipc_service_id_t, scheduler_ipc_worker_handler_fn, void *, uint64_t, scheduler_ipc_worker_id_t *);
+bool scheduler_ipc_worker_stop(scheduler_ipc_worker_id_t);
+bool scheduler_ipc_worker_get_info(scheduler_ipc_worker_id_t, scheduler_ipc_worker_info_t *);
+uint32_t scheduler_ipc_worker_maintenance(void);
+bool scheduler_ipc_worker_runtime_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
