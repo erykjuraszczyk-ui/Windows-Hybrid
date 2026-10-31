@@ -423,6 +423,26 @@ bool scheduler_ipc_worker_stop(scheduler_ipc_worker_id_t);
 bool scheduler_ipc_worker_get_info(scheduler_ipc_worker_id_t, scheduler_ipc_worker_info_t *);
 uint32_t scheduler_ipc_worker_maintenance(void);
 bool scheduler_ipc_worker_runtime_self_test(void);
+typedef struct {
+    uint32_t active_workers;
+    uint32_t idle_workers;
+    uint32_t ready_workers;
+    uint32_t running_workers;
+    uint32_t stopping_workers;
+    uint32_t failed_workers;
+    uint32_t max_observed_workers;
+    uint64_t isolated_worker_failures;
+    uint64_t pool_scale_up_events;
+    uint64_t pool_scale_down_events;
+} scheduler_ipc_worker_pool_info_t;
+bool scheduler_ipc_worker_pool_set_size(scheduler_ipc_service_id_t service_id,
+                                        uint32_t desired_workers,
+                                        scheduler_ipc_worker_handler_fn handler,
+                                        void *context,
+                                        uint64_t lease_timeout_ticks);
+bool scheduler_ipc_worker_pool_get_info(scheduler_ipc_service_id_t service_id,
+                                        scheduler_ipc_worker_pool_info_t *info);
+bool scheduler_ipc_worker_pool_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
