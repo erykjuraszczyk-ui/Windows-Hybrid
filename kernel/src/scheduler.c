@@ -3360,8 +3360,8 @@ bool scheduler_ipc_capacity_dispatch_self_test(void) {
         busy_info.dispatch_active == 0U &&
         busy_info.dispatch_capacity_scale_ups >= 2U &&
         busy_info.dispatch_capacity_scale_downs >= 2U;
-    const bool telemetry_ok = diagnostics.dispatch_grants == 5U &&
-        diagnostics.dispatch_releases == 5U &&
+    const bool telemetry_ok = diagnostics.dispatch_grants == 6U &&
+        diagnostics.dispatch_releases == 6U &&
         diagnostics.dispatch_rejections >= 2U &&
         diagnostics.dispatch_capacity_scale_ups >= 2U &&
         diagnostics.dispatch_capacity_scale_downs >= 2U &&
