@@ -333,3 +333,17 @@ Dodano telemetrię per usługa i globalną: kredyty zdobyte/zużyte, wizyty kand
 - Test QEMU wymaga markera `IPC_CAPACITY_DISPATCH_SELFTEST_OK`.
 
 **Ograniczenia:** sloty są abstrakcją admission i nie uruchamiają rzeczywistych workerów CPU. Brak dynamicznej alokacji i SMP safety.
+
+
+## HYBRID OS v0.29.0 — IPC Worker Runtime, Lifecycle & Lease Recovery
+
+**Status: implementacja na gałęzi funkcji; oczekuje na wynik CI/QEMU.**
+
+- Stała pula maksymalnie czterech deskryptorów workerów IPC.
+- Każdy worker jest zadaniem kooperatywnego Scheduler Core utworzonym przez `scheduler_create_task()`.
+- Worker rezerwuje pojemność usługi, pobiera wiadomość, wykonuje handler i zwalnia slot dispatch.
+- Wiadomość pozostaje w deskryptorze podczas ograniczonych ponowień handlera.
+- Lease jest liczony w tickach PIT; maintenance wykrywa wygaśnięcie i uruchamia recovery.
+- Marker QEMU: `HYBRID: IPC_WORKER_RUNTIME_SELFTEST_OK`.
+
+**Granice:** jednordzeniowy Ring 0, kooperatywne zadania step-based i synchroniczny callback. Brak SMP, workerów Ring 3, izolacji procesów i twardych gwarancji czasu rzeczywistego. Recovery nie przerywa siłowo callbacku aktualnie wykonywanego na CPU.
