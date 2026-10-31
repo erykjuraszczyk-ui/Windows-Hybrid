@@ -61,6 +61,7 @@ required_markers=(
   "HYBRID: IPC_QOS_ARBITRATION_SELFTEST_OK"
   "HYBRID: IPC_DRR_FAIR_ADMISSION_SELFTEST_OK"
   "HYBRID: IPC_CAPACITY_DISPATCH_SELFTEST_OK"
+  "HYBRID: IPC_WORKER_RUNTIME_SELFTEST_OK"
   "HYBRID: IPC_DIAGNOSTICS_OK"
   "HYBRID: BOOT_OK"
 )
@@ -72,4 +73,4 @@ for marker in "${required_markers[@]}"; do
     exit 1
   fi
 done
-echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timers, semaphores, IPC services, request/response, pending calls, lifecycle shutdown, queue backpressure, delivery receipts, ACK, exponential retry backoff, circuit breakers, adaptive IPC balancing, priorities, congestion control, service health, deadlines, dead-letter queue, bounded IPC event tracing, token-bucket rate limiting, fair per-source receive scheduling, source quotas, priority-aware admission, deadline-aware IPC scheduling, starvation prevention, QoS profiles, message TTL expiration, stale-queue pruning, queue compaction telemetry, capacity metrics, adaptive admission control, predictive queue pressure forecasting, bounded admission budgets, congestion-aware QoS arbitration, deficit round-robin credits, bounded credit accounting, starvation protection, adaptive IPC worker dispatch capacity and multi-queue load balancing passed in QEMU."
+echo "PASS: Memory Core, GDT/TSS/IST, task lifecycle/reaping, blocking/wakeup, mutex synchronization, timers, semaphores, IPC services, request/response, pending calls, lifecycle shutdown, queue backpressure, delivery receipts, ACK, exponential retry backoff, circuit breakers, adaptive IPC balancing, priorities, congestion control, service health, deadlines, dead-letter queue, bounded IPC event tracing, token-bucket rate limiting, fair per-source receive scheduling, source quotas, priority-aware admission, deadline-aware IPC scheduling, starvation prevention, QoS profiles, message TTL expiration, stale-queue pruning, queue compaction telemetry, capacity metrics, adaptive admission control, predictive queue pressure forecasting, bounded admission budgets, congestion-aware QoS arbitration, deficit round-robin credits, bounded credit accounting, starvation protection, adaptive IPC worker dispatch capacity, cooperative worker tasks, lifecycle and lease recovery passed in QEMU."
