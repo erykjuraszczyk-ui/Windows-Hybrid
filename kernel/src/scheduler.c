@@ -5726,6 +5726,21 @@ bool scheduler_ipc_worker_get_info(scheduler_ipc_worker_id_t worker_id,
     return true;
 }
 
+static bool scheduler_ipc_worker_test_stop_and_reap(
+    scheduler_ipc_worker_id_t worker_id) {
+    scheduler_ipc_worker_info_t info;
+    if (!scheduler_ipc_worker_get_info(worker_id, &info)) return true;
+    if (info.state != SCHEDULER_IPC_WORKER_FAILED &&
+        info.state != SCHEDULER_IPC_WORKER_STOPPING &&
+        !scheduler_ipc_worker_stop(worker_id)) return false;
+    for (uint32_t attempt = 0U; attempt < (SCHEDULER_MAX_TASKS * 2U); ++attempt) {
+        if (!scheduler_ipc_worker_get_info(worker_id, &info)) return true;
+        if (!scheduler_run_once()) return false;
+        (void)scheduler_ipc_worker_maintenance();
+    }
+    return !scheduler_ipc_worker_get_info(worker_id, &info);
+}
+
 uint32_t scheduler_ipc_worker_maintenance(void) {
     uint32_t recovered = 0U;
     const uint64_t now = interrupts_ticks();
@@ -5805,8 +5820,7 @@ bool scheduler_ipc_worker_runtime_self_test(void) {
         info.messages_processed == 1U && calls == 1U &&
         info.state == SCHEDULER_IPC_WORKER_READY &&
         !info.lease_active && info.lease_generation == 1U;
-    if (!scheduler_ipc_worker_stop(worker_id) || !scheduler_run_once()) return false;
-    (void)scheduler_ipc_worker_maintenance();
+    if (!scheduler_ipc_worker_test_stop_and_reap(worker_id)) return false;
     if (!scheduler_ipc_service_unregister(source) ||
         !scheduler_ipc_service_unregister(destination)) return false;
 
@@ -5836,8 +5850,7 @@ bool scheduler_ipc_worker_runtime_self_test(void) {
     const bool retried = scheduler_ipc_worker_get_info(retry_id, &retry_info) &&
         retry_info.messages_processed == 1U && retry_calls == 2U &&
         retry_info.lease_recoveries == 1U && !retry_info.lease_active;
-    if (!scheduler_ipc_worker_stop(retry_id) || !scheduler_run_once()) return false;
-    (void)scheduler_ipc_worker_maintenance();
+    if (!scheduler_ipc_worker_test_stop_and_reap(retry_id)) return false;
     const bool cleanup = scheduler_ipc_service_unregister(retry_source) &&
                          scheduler_ipc_service_unregister(retry_destination);
     return processed && retried && cleanup;
@@ -5981,32 +5994,21 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     const scheduler_ipc_worker_id_t second_id = first_id + 1U;
     serial_write("POOL_TEST_C\\n");
 
-    if (!scheduler_run_once() || !scheduler_run_once()) return false;
+    for (uint32_t step = 0U; step < (SCHEDULER_MAX_TASKS * 2U) &&
+         (context.failing_calls == 0U || context.healthy_calls == 0U); ++step) {
+        if (!scheduler_run_once()) return false;
+    }
     serial_write("POOL_TEST_D\\n");
     scheduler_ipc_worker_info_t first = {0}, second = {0};
     if (!scheduler_ipc_worker_get_info(first_id, &first) ||
         !scheduler_ipc_worker_get_info(second_id, &second) ||
         first.handler_failures != 1U || second.messages_processed != 1U ||
-        context.failing_calls != 1U || context.healthy_calls != 1U) {
-        serial_write("POOL_DIAG first_fail=");
-        serial_write_hex64(first.handler_failures);
-        serial_write(" second_done=");
-        serial_write_hex64(second.messages_processed);
-        serial_write(" bad_calls=");
-        serial_write_hex64(context.failing_calls);
-        serial_write(" good_calls=");
-        serial_write_hex64(context.healthy_calls);
-        serial_write(" first_state=");
-        serial_write_hex64(first.state);
-        serial_write(" second_state=");
-        serial_write_hex64(second.state);
-        serial_write("\\n");
-        return false;
-    }
+        context.failing_calls != 1U || context.healthy_calls != 1U) return false;
 
     serial_write("POOL_TEST_E\\n");
-    /* Expire only the failing worker's lease; the healthy worker remains usable. */
+    /* Expire only the failing worker's lease; wait for its scheduler turn. */
     for (uint32_t attempt = 0U; attempt < 2U; ++attempt) {
+        const uint32_t calls_before = context.failing_calls;
         const uint64_t expire_flags = scheduler_irq_save_disable();
         scheduler_ipc_worker_t *failing = scheduler_ipc_worker_find_locked(first_id);
         if (failing == NULL) {
@@ -6015,7 +6017,11 @@ bool scheduler_ipc_worker_pool_self_test(void) {
         }
         failing->info.lease_deadline_tick = 0U;
         scheduler_irq_restore(expire_flags);
-        if (!scheduler_run_once() || !scheduler_run_once()) return false;
+        for (uint32_t step = 0U; step < (SCHEDULER_MAX_TASKS * 2U) &&
+             context.failing_calls == calls_before; ++step) {
+            if (!scheduler_run_once()) return false;
+        }
+        if (context.failing_calls == calls_before) return false;
     }
 
     serial_write("POOL_TEST_F\\n");
@@ -6030,9 +6036,7 @@ bool scheduler_ipc_worker_pool_self_test(void) {
         pool.max_observed_workers >= 2U && pool.pool_scale_up_events >= 1U;
 
     serial_write("POOL_TEST_G\\n");
-    if (!scheduler_ipc_worker_stop(second_id) || !scheduler_run_once()) return false;
-    (void)scheduler_ipc_worker_maintenance();
-    (void)scheduler_ipc_worker_maintenance();
+    if (!scheduler_ipc_worker_test_stop_and_reap(second_id)) return false;
     serial_write("POOL_TEST_H\\n");
     const bool cleanup = scheduler_ipc_service_unregister(source) &&
                          scheduler_ipc_service_unregister(destination);
