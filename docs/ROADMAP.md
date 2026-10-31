@@ -79,3 +79,5 @@ Kolejny numer nie zamyka poprzedniego etapu automatycznie. Funkcja jest gotowa d
 | v0.22.0 | IPC Message Expiration, per-message TTL, stale-queue pruning, integracja receipt/DLQ i diagnostyka; specyfikacja na gałęzi funkcji, implementacja pending |
 
 | v0.28.0 | Model pojemności usług IPC, adaptacyjne sloty worker dispatch, znormalizowane load balancing i telemetria; CI PASS na gałęzi funkcji ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180895270)) |
+
+| v0.29.0 | IPC Worker Runtime: zadania workerów oparte na schedulerze, przetwarzanie wiadomości, lifecycle, ograniczone retry i lease recovery; CI pending |
