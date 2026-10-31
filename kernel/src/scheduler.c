@@ -5954,6 +5954,7 @@ static bool scheduler_ipc_worker_pool_test_handler(
 
 bool scheduler_ipc_worker_pool_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
+    serial_write("POOL_TEST_A\\n");
     scheduler_ipc_service_id_t source = 0U, destination = 0U;
     if (!scheduler_ipc_service_register_ex("pool.src",
             SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &source) ||
@@ -5970,6 +5971,7 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     if (scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
         SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
 
+    serial_write("POOL_TEST_B\\n");
     if (!scheduler_ipc_service_set_dispatch_capacity(destination, 2U, 2U))
         return false;
     scheduler_ipc_worker_pool_test_context_t context = {0};
@@ -5977,14 +5979,17 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     if (!scheduler_ipc_worker_pool_set_size(destination, 2U,
             scheduler_ipc_worker_pool_test_handler, &context, 1U)) return false;
     const scheduler_ipc_worker_id_t second_id = first_id + 1U;
+    serial_write("POOL_TEST_C\\n");
 
     if (!scheduler_run_once() || !scheduler_run_once()) return false;
+    serial_write("POOL_TEST_D\\n");
     scheduler_ipc_worker_info_t first = {0}, second = {0};
     if (!scheduler_ipc_worker_get_info(first_id, &first) ||
         !scheduler_ipc_worker_get_info(second_id, &second) ||
         first.handler_failures != 1U || second.messages_processed != 1U ||
         context.failing_calls != 1U || context.healthy_calls != 1U) return false;
 
+    serial_write("POOL_TEST_E\\n");
     /* Expire only the failing worker's lease; the healthy worker remains usable. */
     for (uint32_t attempt = 0U; attempt < 2U; ++attempt) {
         const uint64_t expire_flags = scheduler_irq_save_disable();
@@ -5998,6 +6003,7 @@ bool scheduler_ipc_worker_pool_self_test(void) {
         if (!scheduler_run_once() || !scheduler_run_once()) return false;
     }
 
+    serial_write("POOL_TEST_F\\n");
     scheduler_ipc_worker_pool_info_t pool = {0};
     const bool isolated = scheduler_ipc_worker_get_info(first_id, &first) &&
         scheduler_ipc_worker_get_info(second_id, &second) &&
@@ -6008,9 +6014,11 @@ bool scheduler_ipc_worker_pool_self_test(void) {
         pool.isolated_worker_failures >= 1U &&
         pool.max_observed_workers >= 2U && pool.pool_scale_up_events >= 1U;
 
+    serial_write("POOL_TEST_G\\n");
     if (!scheduler_ipc_worker_stop(second_id) || !scheduler_run_once()) return false;
     (void)scheduler_ipc_worker_maintenance();
     (void)scheduler_ipc_worker_maintenance();
+    serial_write("POOL_TEST_H\\n");
     const bool cleanup = scheduler_ipc_service_unregister(source) &&
                          scheduler_ipc_service_unregister(destination);
     return isolated && cleanup;
