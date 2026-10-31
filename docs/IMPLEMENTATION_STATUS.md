@@ -324,7 +324,7 @@ Dodano telemetrię per usługa i globalną: kredyty zdobyte/zużyte, wizyty kand
 
 ## HYBRID OS v0.28.0 — IPC Multi-Queue Load Balancing, Service Capacity Modeling & Adaptive Worker Dispatch
 
-**Status: implementacja na gałęzi funkcji; CI pending.**
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41180895270](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180895270) potwierdził kompilację, `IPC_CAPACITY_DISPATCH_SELFTEST_OK` i `BOOT_OK`.
 
 - Dodano konfigurację min/max logicznych slotów dispatch (1–4) per usługa.
 - Przydział slotu jest atomowy; selektor porównuje znormalizowane obciążenie kolejki i aktywnych slotów.
