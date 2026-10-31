@@ -184,3 +184,10 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 **Status: CI PASS na gałęzi funkcji; PR draft oczekuje na v0.25.0.** GitHub Actions [#41120081706](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41120081706) potwierdził kompilację, QEMU, `IPC_QOS_ARBITRATION_SELFTEST_OK` i `BOOT_OK`. Selektor usług uwzględnia teraz obciążenie kolejki, priorytet, profil QoS, trend predykcyjny i pozostały budżet admission. Liczniki arbitrażu są dostępne per usługa i globalnie. Remisy rozstrzyga rotacja, aby ograniczać trwałe faworyzowanie jednego kandydata.
 
 **Ograniczenia:** arbitraż wybiera usługę docelową, nie planuje zadań CPU. QoS jest preferencją wyboru, nie twardą gwarancją deadline’u. Brak dynamicznej alokacji, zmiany pojemności kolejki i gwarancji SMP.
+
+
+## HYBRID OS v0.28.0 — IPC Multi-Queue Load Balancing & Adaptive Worker Dispatch
+
+**Status: implementation committed; QEMU CI validation pending.** Dodano model pojemności dispatch per usługa (1–4 logiczne sloty), adaptacyjne skalowanie w górę przy wysokim obciążeniu kolejki i w dół po jej opróżnieniu oraz atomowy acquire/release slotu. Selektor równoważy usługi na podstawie znormalizowanego obciążenia kolejki i aktywnych rezerwacji. Szczegóły: [specyfikacja v0.28.0](docs/BOOTSTRAP_v0.28.0.md).
+
+**Ograniczenia:** sloty są logicznym limitem admission, nie tworzą wątków ani zadań CPU. Rzeczywisty worker runtime jest osobnym etapem. Brak dynamicznej alokacji i SMP safety.
