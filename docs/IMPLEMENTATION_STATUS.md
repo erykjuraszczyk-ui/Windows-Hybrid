@@ -320,3 +320,16 @@ Test QEMU weryfikuje cykl high 3 → 2 → 3, zachowanie backpressure do osiągn
 Dodano telemetrię per usługa i globalną: kredyty zdobyte/zużyte, wizyty kandydatów i aktywacje ochrony starvation. Test QEMU weryfikuje obsługę BEST_EFFORT i DEADLINE_CRITICAL, ograniczenie kredytów oraz liczniki.
 
 **Ograniczenia:** DRR dotyczy arbitrażu docelowych usług IPC, nie planowania CPU ani odbioru wiadomości per źródło. Quantum stanowi wagę względną, nie gwarancję czasu rzeczywistego. Kredyty są ulotne i działają w jednordzeniowym Ring 0; brak SMP safety i trwałości stanu.
+
+
+## HYBRID OS v0.28.0 — IPC Multi-Queue Load Balancing, Service Capacity Modeling & Adaptive Worker Dispatch
+
+**Status: implementacja na gałęzi funkcji; CI pending.**
+
+- Dodano konfigurację min/max logicznych slotów dispatch (1–4) per usługa.
+- Przydział slotu jest atomowy; selektor porównuje znormalizowane obciążenie kolejki i aktywnych slotów.
+- Model zwiększa pojemność przy wysokim poziomie kolejki i zmniejsza ją po spadku presji, z zachowaniem min/max.
+- Dodano telemetrię grantów, odrzuceń, zwolnień i zmian pojemności.
+- Test QEMU wymaga markera `IPC_CAPACITY_DISPATCH_SELFTEST_OK`.
+
+**Ograniczenia:** sloty są abstrakcją admission i nie uruchamiają rzeczywistych workerów CPU. Brak dynamicznej alokacji i SMP safety.
