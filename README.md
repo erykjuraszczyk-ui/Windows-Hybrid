@@ -157,7 +157,7 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 
 ## HYBRID OS v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics
 
-**Status: CI pending.** Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
+**Status: CI PASS w QEMU.** GitHub Actions [#41180355402](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180355402) potwierdził kompilację, `IPC_DRR_FAIR_ADMISSION_SELFTEST_OK`, `IPC_QOS_ARBITRATION_SELFTEST_OK` i `BOOT_OK`. Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
 
 
 ## Następny etap — HYBRID OS v0.22.0
