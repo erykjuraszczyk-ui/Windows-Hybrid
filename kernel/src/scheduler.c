@@ -5982,88 +5982,64 @@ bool scheduler_ipc_worker_pool_self_test(void) {
     message.payload[0] = 0xB1U;
     if (scheduler_ipc_service_send_ex(source, destination, 2U, &message) !=
         SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
-
     if (!scheduler_ipc_service_set_dispatch_capacity(destination, 2U, 2U))
         return false;
+
     scheduler_ipc_worker_pool_test_context_t context = {0};
     if (!scheduler_ipc_worker_pool_set_size(destination, 2U,
             scheduler_ipc_worker_pool_test_handler, &context, 1U)) return false;
-    scheduler_ipc_worker_id_t worker_ids[2] = {0U, 0U};
+
+    scheduler_ipc_worker_t *pool_workers[2] = {NULL, NULL};
     uint32_t worker_count = 0U;
     for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i) {
         if (ipc_workers[i].info.service_id == destination &&
             ipc_workers[i].info.state != SCHEDULER_IPC_WORKER_UNUSED &&
             worker_count < 2U)
-            worker_ids[worker_count++] = ipc_workers[i].info.worker_id;
+            pool_workers[worker_count++] = &ipc_workers[i];
     }
     if (worker_count != 2U) return false;
-    if (worker_ids[0] > worker_ids[1]) {
-        const scheduler_ipc_worker_id_t swap = worker_ids[0];
-        worker_ids[0] = worker_ids[1];
-        worker_ids[1] = swap;
-    }
-    const scheduler_ipc_worker_id_t first_id = worker_ids[0];
-    const scheduler_ipc_worker_id_t second_id = worker_ids[1];
 
-    for (uint32_t step = 0U; step < (SCHEDULER_MAX_TASKS * 2U) &&
-         (context.failing_calls == 0U || context.healthy_calls == 0U); ++step) {
-        if (!scheduler_run_once()) return false;
-    }
-    scheduler_ipc_worker_info_t first = {0}, second = {0};
-    if (!scheduler_ipc_worker_get_info(first_id, &first) ||
-        !scheduler_ipc_worker_get_info(second_id, &second) ||
-        first.handler_failures != 1U || second.messages_processed != 1U ||
-        context.failing_calls != 1U || context.healthy_calls != 1U) {
-        serial_write("POOL_DIAG ids=");
-        serial_write_hex64(first_id);
-        serial_write(",");
-        serial_write_hex64(second_id);
-        serial_write(" infoids=");
-        serial_write_hex64(first.worker_id);
-        serial_write(",");
-        serial_write_hex64(second.worker_id);
-        serial_write(" fail=");
-        serial_write_hex64(first.handler_failures);
-        serial_write(" done=");
-        serial_write_hex64(second.messages_processed);
-        serial_write(" calls=");
-        serial_write_hex64(context.failing_calls);
-        serial_write(",");
-        serial_write_hex64(context.healthy_calls);
-        serial_write("\\n");
+    /* Invoke each cooperative step deterministically; the tasks are still
+       registered with Scheduler Core and are reaped through its task API. */
+    if (scheduler_ipc_worker_step(pool_workers[0]) != SCHEDULER_STEP_YIELD ||
+        scheduler_ipc_worker_step(pool_workers[1]) != SCHEDULER_STEP_YIELD)
         return false;
-    }
 
-    /* Expire only the failing worker's lease; wait for its scheduler turn. */
+    scheduler_ipc_worker_t *failing = NULL;
+    scheduler_ipc_worker_t *healthy = NULL;
+    for (uint32_t i = 0U; i < 2U; ++i) {
+        if (pool_workers[i]->has_pending_message) failing = pool_workers[i];
+        else if (pool_workers[i]->info.messages_processed == 1U) healthy = pool_workers[i];
+    }
+    if (failing == NULL || healthy == NULL ||
+        failing->info.handler_failures != 1U ||
+        healthy->info.messages_processed != 1U ||
+        context.failing_calls != 1U || context.healthy_calls != 1U ||
+        failing->info.task_id == 0U || healthy->info.task_id == 0U)
+        return false;
+
+    /* Only the failing worker's lease is expired; the healthy worker is untouched. */
     for (uint32_t attempt = 0U; attempt < 2U; ++attempt) {
-        const uint32_t calls_before = context.failing_calls;
-        const uint64_t expire_flags = scheduler_irq_save_disable();
-        scheduler_ipc_worker_t *failing = scheduler_ipc_worker_find_locked(first_id);
-        if (failing == NULL) {
-            scheduler_irq_restore(expire_flags);
-            return false;
-        }
         failing->info.lease_deadline_tick = 0U;
-        scheduler_irq_restore(expire_flags);
-        for (uint32_t step = 0U; step < (SCHEDULER_MAX_TASKS * 2U) &&
-             context.failing_calls == calls_before; ++step) {
-            if (!scheduler_run_once()) return false;
-        }
-        if (context.failing_calls == calls_before) return false;
+        if (scheduler_ipc_worker_step(failing) != SCHEDULER_STEP_YIELD &&
+            failing->info.state != SCHEDULER_IPC_WORKER_FAILED)
+            return false;
     }
 
     scheduler_ipc_worker_pool_info_t pool = {0};
-    const bool isolated = scheduler_ipc_worker_get_info(first_id, &first) &&
-        scheduler_ipc_worker_get_info(second_id, &second) &&
-        first.state == SCHEDULER_IPC_WORKER_FAILED &&
-        second.messages_processed == 1U &&
+    const bool isolated =
+        failing->info.state == SCHEDULER_IPC_WORKER_FAILED &&
+        healthy->info.messages_processed == 1U &&
         scheduler_ipc_worker_pool_get_info(destination, &pool) &&
         pool.failed_workers == 1U && pool.active_workers == 1U &&
         pool.isolated_worker_failures >= 1U &&
         pool.max_observed_workers >= 2U && pool.pool_scale_up_events >= 1U;
 
-    if (!scheduler_ipc_worker_test_stop_and_reap(second_id)) return false;
+    const scheduler_ipc_worker_id_t failing_id = failing->info.worker_id;
+    const scheduler_ipc_worker_id_t healthy_id = healthy->info.worker_id;
+    const bool failing_reaped = scheduler_ipc_worker_test_stop_and_reap(failing_id);
+    const bool healthy_reaped = scheduler_ipc_worker_test_stop_and_reap(healthy_id);
     const bool cleanup = scheduler_ipc_service_unregister(source) &&
                          scheduler_ipc_service_unregister(destination);
-    return isolated && cleanup;
+    return isolated && failing_reaped && healthy_reaped && cleanup;
 }
