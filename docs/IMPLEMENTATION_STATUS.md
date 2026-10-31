@@ -311,3 +311,12 @@ Test QEMU weryfikuje cykl high 3 → 2 → 3, zachowanie backpressure do osiągn
 - Dodano migawki per-usługa oraz globalne liczniki selekcji, pominięć presji i korekt QoS.
 
 **Ograniczenia:** to arbitraż usług IPC, a nie globalny scheduler CPU. QoS nie daje gwarancji twardych deadline'ów. Synchronizacja pozostaje single-core Ring 0; kolejka ma stałą pojemność 4.
+
+
+## HYBRID OS v0.27.0 — IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits
+
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41180355402](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180355402) potwierdził kompilację, test QEMU, `IPC_DRR_FAIR_ADMISSION_SELFTEST_OK` i `BOOT_OK`. Selektor adaptacyjny otrzymuje ograniczone kredyty deficit per usługa. Każda kwalifikująca się usługa zdobywa quantum zależne od QoS (BEST_EFFORT 2, NORMAL 4, LATENCY_SENSITIVE 6, DEADLINE_CRITICAL 8); kredyt jest ograniczony do 32, a wybór zużywa maksymalnie 4 jednostki. Aging po czterech kolejnych rundach uruchamia ochronę przed zagłodzeniem. Usługi przeciążone, z otwartym circuit breakerem lub wyczerpanym budżetem predykcyjnym nadal są pomijane.
+
+Dodano telemetrię per usługa i globalną: kredyty zdobyte/zużyte, wizyty kandydatów i aktywacje ochrony starvation. Test QEMU weryfikuje obsługę BEST_EFFORT i DEADLINE_CRITICAL, ograniczenie kredytów oraz liczniki.
+
+**Ograniczenia:** DRR dotyczy arbitrażu docelowych usług IPC, nie planowania CPU ani odbioru wiadomości per źródło. Quantum stanowi wagę względną, nie gwarancję czasu rzeczywistego. Kredyty są ulotne i działają w jednordzeniowym Ring 0; brak SMP safety i trwałości stanu.

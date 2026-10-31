@@ -70,6 +70,8 @@ static uint64_t ipc_diag_predictive_budget_rejections;
 static uint64_t ipc_diag_arbitration_selections;
 static uint64_t ipc_diag_arbitration_pressure_skips;
 static uint64_t ipc_diag_arbitration_qos_adjustments;
+static uint64_t ipc_diag_drr_credit_earned, ipc_diag_drr_credit_spent;
+static uint64_t ipc_diag_drr_starvation_protections, ipc_diag_drr_candidate_visits;
 static uint32_t ipc_trace_head, ipc_trace_count;
 #define SCHEDULER_IPC_EXPIRED_HISTORY 16U
 static scheduler_ipc_expired_call_t ipc_expired_calls[SCHEDULER_IPC_EXPIRED_HISTORY];
@@ -1176,6 +1178,11 @@ typedef struct {
     uint64_t arbitration_pressure_skips;
     uint64_t arbitration_qos_adjustments;
     uint32_t arbitration_last_score;
+    uint32_t arbitration_deficit_credit;
+    uint32_t arbitration_wait_rounds;
+    uint64_t arbitration_credit_earned;
+    uint64_t arbitration_credit_spent;
+    uint64_t arbitration_starvation_protections;
     uint32_t congestion_high_watermark;
     uint32_t congestion_low_watermark;
     bool congestion_control_enabled;
@@ -1313,6 +1320,11 @@ static void scheduler_ipc_service_finalize_locked(scheduler_ipc_service_t *servi
     service->arbitration_pressure_skips = 0U;
     service->arbitration_qos_adjustments = 0U;
     service->arbitration_last_score = 0U;
+    service->arbitration_deficit_credit = 0U;
+    service->arbitration_wait_rounds = 0U;
+    service->arbitration_credit_earned = 0U;
+    service->arbitration_credit_spent = 0U;
+    service->arbitration_starvation_protections = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         service->predictive_samples[sample] = 0U;
     service->messages_enqueued = 0U;
@@ -1463,6 +1475,11 @@ bool scheduler_ipc_service_register_ex(const char *name, uint32_t capabilities,
     free_slot->arbitration_pressure_skips = 0U;
     free_slot->arbitration_qos_adjustments = 0U;
     free_slot->arbitration_last_score = 0U;
+    free_slot->arbitration_deficit_credit = 0U;
+    free_slot->arbitration_wait_rounds = 0U;
+    free_slot->arbitration_credit_earned = 0U;
+    free_slot->arbitration_credit_spent = 0U;
+    free_slot->arbitration_starvation_protections = 0U;
     for (uint32_t sample = 0U; sample < SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW; ++sample)
         free_slot->predictive_samples[sample] = 0U;
     free_slot->priority = 1U;
@@ -1565,6 +1582,11 @@ static void scheduler_ipc_service_info_copy_locked(const scheduler_ipc_service_t
     info->arbitration_pressure_skips = service->arbitration_pressure_skips;
     info->arbitration_qos_adjustments = service->arbitration_qos_adjustments;
     info->arbitration_last_score = service->arbitration_last_score;
+    info->arbitration_deficit_credit = service->arbitration_deficit_credit;
+    info->arbitration_wait_rounds = service->arbitration_wait_rounds;
+    info->arbitration_credit_earned = service->arbitration_credit_earned;
+    info->arbitration_credit_spent = service->arbitration_credit_spent;
+    info->arbitration_starvation_protections = service->arbitration_starvation_protections;
     info->queue_policy = service->queue_policy;
     info->queue_high_watermark = service->queue_high_watermark;
     info->priority = service->priority;
@@ -1822,9 +1844,11 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
         return false;
     const uint64_t flags = scheduler_irq_save_disable();
     bool found = false;
+    bool starvation_override = false;
     uint64_t best_score = UINT64_MAX;
     scheduler_ipc_service_id_t best_id = 0U;
     static uint32_t tie_cursor;
+    uint32_t best_wait_rounds = 0U;
     for (uint32_t n = 0U; n < candidate_count; ++n) {
         const uint32_t i = (tie_cursor + n) % candidate_count;
         scheduler_ipc_service_t *service = scheduler_ipc_find_service_locked(candidates[i]);
@@ -1839,6 +1863,25 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
             ++ipc_diag_arbitration_pressure_skips;
             continue;
         }
+        ++ipc_diag_drr_candidate_visits;
+        uint32_t quantum = 4U;
+        switch (service->qos_profile) {
+            case SCHEDULER_IPC_QOS_BEST_EFFORT: quantum = 2U; break;
+            case SCHEDULER_IPC_QOS_LATENCY_SENSITIVE: quantum = 6U; break;
+            case SCHEDULER_IPC_QOS_DEADLINE_CRITICAL: quantum = 8U; break;
+            case SCHEDULER_IPC_QOS_NORMAL:
+            default: quantum = 4U; break;
+        }
+        const uint32_t old_credit = service->arbitration_deficit_credit;
+        service->arbitration_deficit_credit =
+            old_credit > SCHEDULER_IPC_DRR_CREDIT_MAX - quantum ?
+            SCHEDULER_IPC_DRR_CREDIT_MAX : old_credit + quantum;
+        const uint32_t earned = service->arbitration_deficit_credit - old_credit;
+        service->arbitration_credit_earned += earned;
+        ipc_diag_drr_credit_earned += earned;
+        if (service->arbitration_wait_rounds < SCHEDULER_IPC_DRR_STARVATION_ROUNDS)
+            ++service->arbitration_wait_rounds;
+
         uint64_t score = ((uint64_t)service->channel.count * UINT64_C(1000)) /
                          (uint64_t)service->priority;
         switch (service->qos_profile) {
@@ -1858,27 +1901,36 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
                 ++ipc_diag_arbitration_qos_adjustments;
                 break;
             case SCHEDULER_IPC_QOS_NORMAL:
-            default:
-                break;
+            default: break;
         }
         if (service->predictive_admission_enabled) {
-            if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_RISING) {
+            if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_RISING)
                 score += UINT64_C(500);
-            } else if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_FALLING) {
+            else if (service->predictive_trend == SCHEDULER_IPC_PRESSURE_FALLING)
                 score = score > UINT64_C(100) ? score - UINT64_C(100) : 0U;
-            }
             if (service->predictive_max_budget > 0U &&
                 service->predictive_current_budget < service->predictive_max_budget) {
-                const uint64_t depleted =
-                    (uint64_t)(service->predictive_max_budget -
-                               service->predictive_current_budget);
+                const uint64_t depleted = (uint64_t)(service->predictive_max_budget -
+                    service->predictive_current_budget);
                 score += (depleted * UINT64_C(200)) /
                          (uint64_t)service->predictive_max_budget;
             }
         }
-        service->arbitration_last_score =
-            score > UINT32_MAX ? UINT32_MAX : (uint32_t)score;
-        if (!found || score < best_score) {
+        const uint64_t credit_bonus = (uint64_t)service->arbitration_deficit_credit *
+                                      UINT64_C(25);
+        score = score > credit_bonus ? score - credit_bonus : 0U;
+        service->arbitration_last_score = score > UINT32_MAX ? UINT32_MAX : (uint32_t)score;
+
+        const bool starved = service->arbitration_wait_rounds >=
+                             SCHEDULER_IPC_DRR_STARVATION_ROUNDS;
+        if (starved && (!starvation_override ||
+                        service->arbitration_wait_rounds > best_wait_rounds)) {
+            found = true;
+            starvation_override = true;
+            best_wait_rounds = service->arbitration_wait_rounds;
+            best_score = score;
+            best_id = service->id;
+        } else if (!starvation_override && (!found || score < best_score)) {
             found = true;
             best_score = score;
             best_id = service->id;
@@ -1890,6 +1942,16 @@ bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *can
         if (selected != NULL) {
             ++selected->arbitration_selections;
             ++ipc_diag_arbitration_selections;
+            const uint32_t spent = selected->arbitration_deficit_credit < 4U ?
+                                   selected->arbitration_deficit_credit : 4U;
+            selected->arbitration_deficit_credit -= spent;
+            selected->arbitration_credit_spent += spent;
+            ipc_diag_drr_credit_spent += spent;
+            selected->arbitration_wait_rounds = 0U;
+            if (starvation_override) {
+                ++selected->arbitration_starvation_protections;
+                ++ipc_diag_drr_starvation_protections;
+            }
         }
         for (uint32_t i = 0U; i < candidate_count; ++i) {
             if (candidates[i] == best_id) {
@@ -3060,6 +3122,64 @@ bool scheduler_ipc_qos_arbitration_self_test(void) {
     return telemetry && cleanup;
 }
 
+
+bool scheduler_ipc_drr_fair_admission_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, best_effort = 0U, normal = 0U, critical = 0U;
+    const uint32_t caps = SCHEDULER_IPC_SERVICE_CAP_ONE_WAY;
+    if (!scheduler_ipc_service_register_ex("drr.source", caps, &source) ||
+        !scheduler_ipc_service_register_ex("drr.best", caps, &best_effort) ||
+        !scheduler_ipc_service_register_ex("drr.norm", caps, &normal) ||
+        !scheduler_ipc_service_register_ex("drr.crit", caps, &critical)) return false;
+    if (!scheduler_ipc_service_set_qos_profile(best_effort,
+            SCHEDULER_IPC_QOS_BEST_EFFORT, 0U, 0U) ||
+        !scheduler_ipc_service_set_qos_profile(normal,
+            SCHEDULER_IPC_QOS_NORMAL, 0U, 0U) ||
+        !scheduler_ipc_service_set_qos_profile(critical,
+            SCHEDULER_IPC_QOS_DEADLINE_CRITICAL, 8U, 0U)) return false;
+
+    /* Keep BEST_EFFORT eligible but less attractive, so aging must rescue it. */
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x44525231);
+    message.length = 1U;
+    message.payload[0] = UINT8_C(0xA5);
+    if (scheduler_ipc_service_send_ex(source, best_effort, 1U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+
+    const scheduler_ipc_service_id_t candidates[3] = {
+        best_effort, normal, critical
+    };
+    uint32_t best_effort_grants = 0U, critical_grants = 0U;
+    for (uint32_t round = 0U; round < 12U; ++round) {
+        scheduler_ipc_service_id_t selected = 0U;
+        if (!scheduler_ipc_service_select_adaptive(candidates, 3U, &selected))
+            return false;
+        if (selected == best_effort) ++best_effort_grants;
+        if (selected == critical) ++critical_grants;
+    }
+    scheduler_ipc_service_info_t best_info = {0}, normal_info = {0}, critical_info = {0};
+    if (!scheduler_ipc_service_get_info(best_effort, &best_info) ||
+        !scheduler_ipc_service_get_info(normal, &normal_info) ||
+        !scheduler_ipc_service_get_info(critical, &critical_info)) return false;
+    scheduler_ipc_diagnostics_t diagnostics = {0};
+    scheduler_ipc_get_diagnostics(&diagnostics);
+    const bool bounded = best_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX &&
+        normal_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX &&
+        critical_info.arbitration_deficit_credit <= SCHEDULER_IPC_DRR_CREDIT_MAX;
+    const bool fairness = best_effort_grants > 0U && critical_grants > 0U &&
+        best_info.arbitration_starvation_protections > 0U;
+    const bool accounting = diagnostics.drr_credit_earned > 0U &&
+        diagnostics.drr_credit_spent > 0U &&
+        diagnostics.drr_starvation_protections > 0U &&
+        diagnostics.drr_candidate_visits >= 36U;
+    const bool cleanup = scheduler_ipc_service_unregister(critical) &&
+        scheduler_ipc_service_unregister(normal) &&
+        scheduler_ipc_service_unregister(best_effort) &&
+        scheduler_ipc_service_unregister(source) &&
+        scheduler_ipc_service_count() == 0U;
+    return bounded && fairness && accounting && cleanup;
+}
+
 bool scheduler_ipc_adaptive_load_self_test(void) {
     if (scheduler_ipc_service_count() != 0U) return false;
     scheduler_ipc_service_id_t source = 0U, low = 0U, high = 0U;
@@ -3937,6 +4057,10 @@ void scheduler_ipc_get_diagnostics(scheduler_ipc_diagnostics_t *diagnostics) {
     diagnostics->arbitration_selections = ipc_diag_arbitration_selections;
     diagnostics->arbitration_pressure_skips = ipc_diag_arbitration_pressure_skips;
     diagnostics->arbitration_qos_adjustments = ipc_diag_arbitration_qos_adjustments;
+    diagnostics->drr_credit_earned = ipc_diag_drr_credit_earned;
+    diagnostics->drr_credit_spent = ipc_diag_drr_credit_spent;
+    diagnostics->drr_starvation_protections = ipc_diag_drr_starvation_protections;
+    diagnostics->drr_candidate_visits = ipc_diag_drr_candidate_visits;
     diagnostics->dead_letters_enqueued = ipc_diag_dead_letters_enqueued;
     diagnostics->dead_letters_dropped = ipc_diag_dead_letters_dropped;
     diagnostics->service_health_successes = ipc_diag_service_health_successes;

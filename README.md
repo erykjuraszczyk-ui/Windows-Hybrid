@@ -1,9 +1,11 @@
 # Windows-Hybrid — HYBRID OS
 
 **Projekt:** natywny system operacyjny x86-64.  
-**Aktualny etap:** v0.21.0 — IPC Deadline-Aware Scheduling, Starvation Prevention & QoS Profiles; CI PASS po scaleniu ([QEMU](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/40687229337)).
+**Aktualny etap:** v0.27.0 — IPC Deficit Round Robin, QoS Starvation Protection & Fair Admission Credits; walidacja CI w toku.
 
 ## Historia statusu
+
+- **v0.27.0 — walidacja w toku:** bounded IPC Deficit Round Robin, QoS-weighted credits, starvation aging i telemetria.
 
 - **v0.1.0 — CI PASS:** minimalny kernel, framebuffer i diagnostyka COM1.
 - **v0.2.0 — CI PASS w skonfigurowanym QEMU:** Memory Core, IDT, wyjątek i PIT.
@@ -75,6 +77,7 @@ Wymagane markery: `TSS_OK`, `IDT_OK`, `IST_OK`, `EXCEPTION_SELFTEST_OK`, `TASK_L
 - [HYBRID OS v0.16.0 — Retry Backoff, Circuit Breakers & Service Health](docs/BOOTSTRAP_v0.16.0.md)
 - [HYBRID OS v0.18.0 — IPC Event Trace & Runtime Observability](docs/BOOTSTRAP_v0.18.0.md)
 - [HYBRID OS v0.19.0 — Token-Bucket Rate Limiting & Admission Control](docs/BOOTSTRAP_v0.19.0.md)
+- [HYBRID OS v0.27.0 — IPC Deficit Round Robin & Fair Admission Credits](docs/BOOTSTRAP_v0.27.0.md)
 
 
 ## HYBRID OS v0.7.0 — Timers, Timeouts & Cancellation
@@ -154,7 +157,7 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 
 ## HYBRID OS v0.18.0 — IPC Event Trace, Runtime Observability & Regression Diagnostics
 
-**Status: CI pending.** Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
+**Status: CI PASS w QEMU.** GitHub Actions [#41180355402](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180355402) potwierdził kompilację, `IPC_DRR_FAIR_ADMISSION_SELFTEST_OK`, `IPC_QOS_ARBITRATION_SELFTEST_OK` i `BOOT_OK`. Dodano bounded trace ring (32 wpisy) dla zdarzeń SEND, RECEIVE, ACK, CIRCUIT, DEADLINE i DEAD_LETTER, publiczny odczyt śladu oraz liczniki zdarzeń i nadpisań. Test QEMU sprawdza kolejność sekwencji i korelację SEND → RECEIVE → ACK. Trace jest ulotny, nie zapisuje payloadów i nie stanowi trwałego audytu ani gwarancji SMP.
 
 
 ## Następny etap — HYBRID OS v0.22.0
