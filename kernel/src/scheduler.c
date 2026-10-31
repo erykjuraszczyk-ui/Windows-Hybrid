@@ -5534,3 +5534,306 @@ bool scheduler_self_test(void) {
            scheduler_task_state(0U) == SCHEDULER_TASK_UNUSED &&
            !scheduler_run_once();
 }
+
+
+/* Bounded IPC worker runtime: one cooperative scheduler task per worker. */
+typedef struct {
+    scheduler_ipc_worker_info_t info;
+    scheduler_ipc_worker_handler_fn handler;
+    void *context;
+    uint64_t lease_timeout_ticks;
+    bool has_pending_message;
+    bool dispatch_reserved;
+    scheduler_ipc_message_t pending_message;
+} scheduler_ipc_worker_t;
+
+static scheduler_ipc_worker_t ipc_workers[SCHEDULER_IPC_WORKER_MAX];
+static scheduler_ipc_worker_id_t ipc_next_worker_id = 1U;
+
+static scheduler_ipc_worker_t *scheduler_ipc_worker_find_locked(
+    scheduler_ipc_worker_id_t worker_id) {
+    if (worker_id == 0U) return NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i)
+        if (ipc_workers[i].info.worker_id == worker_id &&
+            ipc_workers[i].info.state != SCHEDULER_IPC_WORKER_UNUSED)
+            return &ipc_workers[i];
+    return NULL;
+}
+
+static scheduler_step_result_t scheduler_ipc_worker_step(void *context) {
+    scheduler_ipc_worker_t *worker = (scheduler_ipc_worker_t *)context;
+    if (worker == NULL || worker->info.state == SCHEDULER_IPC_WORKER_UNUSED ||
+        worker->info.state == SCHEDULER_IPC_WORKER_FAILED)
+        return SCHEDULER_STEP_COMPLETE;
+    if (worker->info.state == SCHEDULER_IPC_WORKER_STOPPING) {
+        if (worker->dispatch_reserved) {
+            (void)scheduler_ipc_service_dispatch_release(worker->info.service_id, false);
+            worker->dispatch_reserved = false;
+        }
+        worker->has_pending_message = false;
+        worker->info.lease_active = false;
+        return SCHEDULER_STEP_COMPLETE;
+    }
+
+    const uint64_t now = interrupts_ticks();
+    if (worker->has_pending_message && worker->info.lease_active) {
+        if (now < worker->info.lease_deadline_tick) {
+            worker->info.state = SCHEDULER_IPC_WORKER_READY;
+            return SCHEDULER_STEP_YIELD;
+        }
+        worker->info.lease_active = false;
+        ++worker->info.lease_recoveries;
+        ++worker->info.retry_count;
+    }
+
+    if (!worker->has_pending_message) {
+        const scheduler_ipc_service_id_t candidate[1] = { worker->info.service_id };
+        scheduler_ipc_service_id_t selected = 0U;
+        if (!scheduler_ipc_service_dispatch_acquire(candidate, 1U, &selected)) {
+            worker->info.state = SCHEDULER_IPC_WORKER_IDLE;
+            return SCHEDULER_STEP_YIELD;
+        }
+        worker->dispatch_reserved = true;
+        if (!scheduler_ipc_service_receive(worker->info.service_id,
+                                           &worker->pending_message)) {
+            (void)scheduler_ipc_service_dispatch_release(worker->info.service_id, true);
+            worker->dispatch_reserved = false;
+            worker->info.state = SCHEDULER_IPC_WORKER_IDLE;
+            return SCHEDULER_STEP_YIELD;
+        }
+        worker->has_pending_message = true;
+        worker->info.retry_count = 0U;
+    }
+
+    worker->info.state = SCHEDULER_IPC_WORKER_RUNNING;
+    worker->info.lease_active = true;
+    worker->info.lease_deadline_tick = now + worker->lease_timeout_ticks;
+    ++worker->info.lease_generation;
+    const bool handled = worker->handler(worker->info.service_id,
+                                         &worker->pending_message,
+                                         worker->context);
+    if (handled) {
+        if (worker->dispatch_reserved)
+            (void)scheduler_ipc_service_dispatch_release(worker->info.service_id, true);
+        worker->dispatch_reserved = false;
+        worker->has_pending_message = false;
+        worker->info.lease_active = false;
+        worker->info.retry_count = 0U;
+        ++worker->info.messages_processed;
+        worker->info.state = SCHEDULER_IPC_WORKER_READY;
+        return SCHEDULER_STEP_YIELD;
+    }
+
+    ++worker->info.handler_failures;
+    if (worker->info.retry_count + 1U >= SCHEDULER_IPC_WORKER_RETRY_MAX) {
+        if (worker->dispatch_reserved)
+            (void)scheduler_ipc_service_dispatch_release(worker->info.service_id, false);
+        worker->dispatch_reserved = false;
+        worker->info.lease_active = false;
+        worker->info.state = SCHEDULER_IPC_WORKER_FAILED;
+        return SCHEDULER_STEP_COMPLETE;
+    }
+    worker->info.state = SCHEDULER_IPC_WORKER_READY;
+    return SCHEDULER_STEP_YIELD;
+}
+
+bool scheduler_ipc_worker_start(scheduler_ipc_service_id_t service_id,
+                                scheduler_ipc_worker_handler_fn handler,
+                                void *context, uint64_t lease_timeout_ticks,
+                                scheduler_ipc_worker_id_t *worker_id) {
+    if (service_id == 0U || handler == NULL || worker_id == NULL ||
+        lease_timeout_ticks == 0U) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    if (scheduler_ipc_find_service_locked(service_id) == NULL ||
+        ipc_next_worker_id == 0U) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    scheduler_ipc_worker_t *worker = NULL;
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i) {
+        if (ipc_workers[i].info.state == SCHEDULER_IPC_WORKER_UNUSED) {
+            worker = &ipc_workers[i];
+            break;
+        }
+    }
+    if (worker == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    worker->info.worker_id = ipc_next_worker_id++;
+    worker->info.service_id = service_id;
+    worker->info.state = SCHEDULER_IPC_WORKER_READY;
+    worker->info.task_id = 0U;
+    worker->info.lease_active = false;
+    worker->info.lease_deadline_tick = 0U;
+    worker->info.lease_generation = 0U;
+    worker->info.retry_count = 0U;
+    worker->info.messages_processed = 0U;
+    worker->info.handler_failures = 0U;
+    worker->info.lease_recoveries = 0U;
+    worker->handler = handler;
+    worker->context = context;
+    worker->lease_timeout_ticks = lease_timeout_ticks;
+    worker->has_pending_message = false;
+    worker->dispatch_reserved = false;
+    const scheduler_ipc_worker_id_t id = worker->info.worker_id;
+    scheduler_irq_restore(flags);
+
+    scheduler_task_id_t task_id = 0U;
+    if (!scheduler_create_task(scheduler_ipc_worker_step, worker, &task_id)) {
+        const uint64_t rollback_flags = scheduler_irq_save_disable();
+        worker->info.state = SCHEDULER_IPC_WORKER_UNUSED;
+        worker->info.worker_id = 0U;
+        scheduler_irq_restore(rollback_flags);
+        return false;
+    }
+    const uint64_t finish_flags = scheduler_irq_save_disable();
+    worker->info.task_id = task_id;
+    *worker_id = id;
+    scheduler_irq_restore(finish_flags);
+    return true;
+}
+
+bool scheduler_ipc_worker_stop(scheduler_ipc_worker_id_t worker_id) {
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_worker_t *worker = scheduler_ipc_worker_find_locked(worker_id);
+    if (worker == NULL || worker->info.state == SCHEDULER_IPC_WORKER_FAILED ||
+        worker->info.state == SCHEDULER_IPC_WORKER_STOPPING) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    worker->info.state = SCHEDULER_IPC_WORKER_STOPPING;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+bool scheduler_ipc_worker_get_info(scheduler_ipc_worker_id_t worker_id,
+                                   scheduler_ipc_worker_info_t *info) {
+    if (info == NULL) return false;
+    const uint64_t flags = scheduler_irq_save_disable();
+    scheduler_ipc_worker_t *worker = scheduler_ipc_worker_find_locked(worker_id);
+    if (worker == NULL) {
+        scheduler_irq_restore(flags);
+        return false;
+    }
+    *info = worker->info;
+    scheduler_irq_restore(flags);
+    return true;
+}
+
+uint32_t scheduler_ipc_worker_maintenance(void) {
+    uint32_t recovered = 0U;
+    const uint64_t now = interrupts_ticks();
+    const uint64_t flags = scheduler_irq_save_disable();
+    for (uint32_t i = 0U; i < SCHEDULER_IPC_WORKER_MAX; ++i) {
+        scheduler_ipc_worker_t *worker = &ipc_workers[i];
+        if (worker->info.state == SCHEDULER_IPC_WORKER_UNUSED) continue;
+        if (worker->has_pending_message && worker->info.lease_active &&
+            now >= worker->info.lease_deadline_tick) {
+            worker->info.lease_active = false;
+            ++worker->info.lease_recoveries;
+            ++worker->info.retry_count;
+            ++recovered;
+        }
+        const scheduler_task_state_t task_state =
+            scheduler_task_state(worker->info.task_id);
+        if ((worker->info.state == SCHEDULER_IPC_WORKER_STOPPING ||
+             worker->info.state == SCHEDULER_IPC_WORKER_FAILED) &&
+            (task_state == SCHEDULER_TASK_EXITED ||
+             task_state == SCHEDULER_TASK_FAILED ||
+             task_state == SCHEDULER_TASK_CANCELLED)) {
+            if (scheduler_task_reap(worker->info.task_id)) {
+                worker->info.state = SCHEDULER_IPC_WORKER_UNUSED;
+                worker->info.worker_id = 0U;
+                worker->info.task_id = 0U;
+                worker->handler = NULL;
+                worker->context = NULL;
+                worker->has_pending_message = false;
+                worker->dispatch_reserved = false;
+            }
+        }
+    }
+    scheduler_irq_restore(flags);
+    return recovered;
+}
+
+static bool scheduler_ipc_worker_test_handler(
+    scheduler_ipc_service_id_t service_id,
+    const scheduler_ipc_message_t *message, void *context) {
+    (void)service_id;
+    if (message == NULL || context == NULL) return false;
+    ++*(uint32_t *)context;
+    return true;
+}
+
+static bool scheduler_ipc_worker_test_retry_handler(
+    scheduler_ipc_service_id_t service_id,
+    const scheduler_ipc_message_t *message, void *context) {
+    (void)service_id;
+    if (message == NULL || context == NULL) return false;
+    uint32_t *calls = (uint32_t *)context;
+    ++*calls;
+    return *calls >= 2U;
+}
+
+bool scheduler_ipc_worker_runtime_self_test(void) {
+    if (scheduler_ipc_service_count() != 0U) return false;
+    scheduler_ipc_service_id_t source = 0U, destination = 0U;
+    if (!scheduler_ipc_service_register_ex("worker.src",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &source) ||
+        !scheduler_ipc_service_register_ex("worker.dst",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &destination)) return false;
+    scheduler_ipc_message_t message = {0};
+    message.type = UINT32_C(0x57524B31);
+    message.length = 1U;
+    message.payload[0] = 0x5AU;
+    if (scheduler_ipc_service_send_ex(source, destination, 1U, &message) !=
+        SCHEDULER_IPC_DELIVERY_DELIVERED) return false;
+
+    uint32_t calls = 0U;
+    scheduler_ipc_worker_id_t worker_id = 0U;
+    if (!scheduler_ipc_worker_start(destination, scheduler_ipc_worker_test_handler,
+                                    &calls, 1U, &worker_id)) return false;
+    if (!scheduler_run_once()) return false;
+    scheduler_ipc_worker_info_t info;
+    const bool processed = scheduler_ipc_worker_get_info(worker_id, &info) &&
+        info.messages_processed == 1U && calls == 1U &&
+        info.state == SCHEDULER_IPC_WORKER_READY &&
+        !info.lease_active && info.lease_generation == 1U;
+    if (!scheduler_ipc_worker_stop(worker_id) || !scheduler_run_once()) return false;
+    (void)scheduler_ipc_worker_maintenance();
+    if (!scheduler_ipc_service_unregister(source) ||
+        !scheduler_ipc_service_unregister(destination)) return false;
+
+    scheduler_ipc_service_id_t retry_source = 0U, retry_destination = 0U;
+    if (!scheduler_ipc_service_register_ex("worker.rsrc",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &retry_source) ||
+        !scheduler_ipc_service_register_ex("worker.rdst",
+            SCHEDULER_IPC_SERVICE_CAP_ONE_WAY, &retry_destination)) return false;
+    if (scheduler_ipc_service_send_ex(retry_source, retry_destination, 2U,
+                                      &message) != SCHEDULER_IPC_DELIVERY_DELIVERED)
+        return false;
+    uint32_t retry_calls = 0U;
+    scheduler_ipc_worker_id_t retry_id = 0U;
+    if (!scheduler_ipc_worker_start(retry_destination,
+            scheduler_ipc_worker_test_retry_handler, &retry_calls, 1U, &retry_id) ||
+        !scheduler_run_once()) return false;
+    const uint64_t recovery_flags = scheduler_irq_save_disable();
+    scheduler_ipc_worker_t *retry_worker = scheduler_ipc_worker_find_locked(retry_id);
+    if (retry_worker == NULL) {
+        scheduler_irq_restore(recovery_flags);
+        return false;
+    }
+    retry_worker->info.lease_deadline_tick = 0U;
+    scheduler_irq_restore(recovery_flags);
+    if (scheduler_ipc_worker_maintenance() != 1U || !scheduler_run_once()) return false;
+    scheduler_ipc_worker_info_t retry_info;
+    const bool retried = scheduler_ipc_worker_get_info(retry_id, &retry_info) &&
+        retry_info.messages_processed == 1U && retry_calls == 2U &&
+        retry_info.lease_recoveries == 1U && !retry_info.lease_active;
+    if (!scheduler_ipc_worker_stop(retry_id) || !scheduler_run_once()) return false;
+    (void)scheduler_ipc_worker_maintenance();
+    const bool cleanup = scheduler_ipc_service_unregister(retry_source) &&
+                         scheduler_ipc_service_unregister(retry_destination);
+    return processed && retried && cleanup;
+}
