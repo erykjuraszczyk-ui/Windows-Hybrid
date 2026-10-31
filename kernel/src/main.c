@@ -403,6 +403,10 @@ void kmain(void) {
         serial_write("HYBRID: FAIL_IPC_DRR_FAIR_ADMISSION\\n"); cpu_halt();
     }
     serial_write("HYBRID: IPC_DRR_FAIR_ADMISSION_SELFTEST_OK\\n");
+    if (!scheduler_ipc_capacity_dispatch_self_test()) {
+        serial_write("HYBRID: FAIL_IPC_CAPACITY_DISPATCH\\n"); cpu_halt();
+    }
+    serial_write("HYBRID: IPC_CAPACITY_DISPATCH_SELFTEST_OK\\n");
     if (!scheduler_ipc_queue_telemetry_self_test()) {
         serial_write("HYBRID: FAIL_IPC_QUEUE_TELEMETRY\n"); cpu_halt();
     }
