@@ -188,6 +188,6 @@ Wynik `DELIVERED` oznacza przyjęcie wiadomości do kolejki, nie potwierdzenie j
 
 ## HYBRID OS v0.28.0 — IPC Multi-Queue Load Balancing & Adaptive Worker Dispatch
 
-**Status: implementation committed; QEMU CI validation pending.** Dodano model pojemności dispatch per usługa (1–4 logiczne sloty), adaptacyjne skalowanie w górę przy wysokim obciążeniu kolejki i w dół po jej opróżnieniu oraz atomowy acquire/release slotu. Selektor równoważy usługi na podstawie znormalizowanego obciążenia kolejki i aktywnych rezerwacji. Szczegóły: [specyfikacja v0.28.0](docs/BOOTSTRAP_v0.28.0.md).
+**Status: CI PASS na gałęzi funkcji.** GitHub Actions [#41180895270](https://github.com/erykjuraszczyk-ui/Windows-Hybrid/actions/runs/41180895270) potwierdził kompilację, `IPC_CAPACITY_DISPATCH_SELFTEST_OK` i `BOOT_OK`. Dodano model pojemności dispatch per usługa (1–4 logiczne sloty), adaptacyjne skalowanie w górę przy wysokim obciążeniu kolejki i w dół po jej opróżnieniu oraz atomowy acquire/release slotu. Selektor równoważy usługi na podstawie znormalizowanego obciążenia kolejki i aktywnych rezerwacji. Szczegóły: [specyfikacja v0.28.0](docs/BOOTSTRAP_v0.28.0.md).
 
 **Ograniczenia:** sloty są logicznym limitem admission, nie tworzą wątków ani zadań CPU. Rzeczywisty worker runtime jest osobnym etapem. Brak dynamicznej alokacji i SMP safety.
