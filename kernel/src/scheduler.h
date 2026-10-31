@@ -18,6 +18,7 @@ typedef enum {
     SCHEDULER_WAIT_CANCELLED
 } scheduler_wait_result_t;
 #define SCHEDULER_IPC_CAPACITY 4U
+#define SCHEDULER_IPC_PRESSURE_SAMPLE_WINDOW 4U
 #define SCHEDULER_IPC_PAYLOAD_SIZE 24U
 #define SCHEDULER_IPC_MAX_SERVICES 8U
 #define SCHEDULER_IPC_MAX_PENDING_CALLS 8U
@@ -129,6 +130,11 @@ typedef struct {
     uint64_t last_success_tick;
     uint64_t last_failure_tick;
 } scheduler_ipc_service_health_t;
+typedef enum {
+    SCHEDULER_IPC_PRESSURE_STABLE = 0U,
+    SCHEDULER_IPC_PRESSURE_RISING = 1U,
+    SCHEDULER_IPC_PRESSURE_FALLING = 2U
+} scheduler_ipc_pressure_trend_t;
 typedef struct {
     scheduler_ipc_service_id_t id;
     uint32_t capabilities;
@@ -139,6 +145,24 @@ typedef struct {
     uint64_t queue_compactions;
     uint64_t queue_compaction_moves;
     uint64_t backpressure_recoveries;
+    bool adaptive_admission_enabled;
+    uint32_t adaptive_min_high_watermark;
+    uint32_t adaptive_max_high_watermark;
+    uint32_t congestion_high_watermark;
+    uint32_t congestion_low_watermark;
+    uint64_t adaptive_admission_adjustments;
+    uint64_t adaptive_pressure_events;
+    bool predictive_admission_enabled;
+    uint32_t predictive_min_budget;
+    uint32_t predictive_max_budget;
+    uint32_t predictive_current_budget;
+    uint32_t predictive_sample_count;
+    scheduler_ipc_pressure_trend_t predictive_trend;
+    uint64_t predictive_samples;
+    uint64_t predictive_rising_predictions;
+    uint64_t predictive_falling_predictions;
+    uint64_t predictive_budget_adjustments;
+    uint64_t predictive_budget_rejections;
     scheduler_ipc_queue_policy_t queue_policy;
     uint32_t queue_high_watermark;
     uint32_t priority;
@@ -215,6 +239,13 @@ typedef struct {
     uint64_t queue_compactions;
     uint64_t queue_compaction_moves;
     uint64_t backpressure_recoveries;
+    uint64_t adaptive_admission_adjustments;
+    uint64_t adaptive_pressure_events;
+    uint64_t predictive_samples;
+    uint64_t predictive_rising_predictions;
+    uint64_t predictive_falling_predictions;
+    uint64_t predictive_budget_adjustments;
+    uint64_t predictive_budget_rejections;
     uint64_t dead_letters_enqueued;
     uint64_t dead_letters_dropped;
     uint64_t service_health_successes;
@@ -328,6 +359,14 @@ bool scheduler_ipc_rate_limit_self_test(void);
 bool scheduler_ipc_service_set_congestion_control(scheduler_ipc_service_id_t service_id,
                                                     uint32_t high_watermark,
                                                     uint32_t low_watermark);
+bool scheduler_ipc_service_set_adaptive_admission(scheduler_ipc_service_id_t service_id,
+                                                   uint32_t min_high_watermark,
+                                                   uint32_t max_high_watermark);
+bool scheduler_ipc_adaptive_admission_self_test(void);
+bool scheduler_ipc_service_set_predictive_admission(scheduler_ipc_service_id_t service_id,
+                                                      uint32_t min_budget,
+                                                      uint32_t max_budget);
+bool scheduler_ipc_predictive_pressure_self_test(void);
 bool scheduler_ipc_service_select_adaptive(const scheduler_ipc_service_id_t *candidates,
                                            uint32_t candidate_count,
                                            scheduler_ipc_service_id_t *selected_service_id);
